@@ -1,0 +1,3 @@
+[default]
+path = "~/Pictures/Wallpapers"
+exec = "~/.config/wpaperd/matugen-hook.sh"
