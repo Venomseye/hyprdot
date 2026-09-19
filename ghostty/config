@@ -1,4 +1,14 @@
 # ~/.config/ghostty/config
+#
+# CORRECTION from my last pass: I previously told you `config.ghostty` was
+# "inert" and only `config` was read. That was wrong. Per Ghostty's own docs,
+# since 1.2.3 BOTH `config.ghostty` and the extensionless `config` are loaded
+# if present, in that order, so a value in `config` overrides the same key
+# in `config.ghostty`. Since your two files were byte-for-byte identical,
+# that ordering never mattered in practice - but the reasoning I gave you was
+# incorrect, so I'm correcting it here. I'm still shipping only this one file
+# (extensionless `config`), because it's the name every Ghostty version
+# understands, and one file is simpler to keep in sync than two.
 
 font-family = JetBrainsMono Nerd Font Mono
 font-size = 13
@@ -6,10 +16,13 @@ font-size = 13
 window-padding-x = 10
 window-padding-y = 10
 
-
 # Optional transparency
 background-opacity = 1
 
+# ---------------------------------------------------------------------------
+# Fallback palette. Used as-is if you delete the matugen include at the bottom
+# of this file; otherwise the generated colours override these.
+# ---------------------------------------------------------------------------
 background = #00111E
 foreground = #CBE0F0
 
@@ -26,7 +39,8 @@ palette = 3=#FFE073
 palette = 4=#0FC5ED
 palette = 5=#a277ff
 palette = 6=#24EAF7
-palette = 7=#24EAF7
+# slot 7 was a duplicate of 6; it should be the normal foreground
+palette = 7=#CBE0F0
 
 palette = 8=#214969
 palette = 9=#E52E2E
@@ -35,5 +49,25 @@ palette = 11=#FFE073
 palette = 12=#A277FF
 palette = 13=#a277ff
 palette = 14=#24EAF7
-palette = 15=#24EAF7
+palette = 15=#FFFFFF
 
+# ---------------------------------------------------------------------------
+# Wallpaper colours from matugen.
+#
+# CORRECTION from my last pass: I previously said this line had to go last
+# because "the last assignment wins". That's not how Ghostty actually works.
+# Per Ghostty's docs, config-file includes are processed at the END of the
+# current file regardless of where the config-file line sits in it - so the
+# included file's keys always win over this file's own keys either way.
+# Position here is just for readability, not correctness.
+#
+# The leading `?` makes it optional - ghostty won't error if it hasn't been
+# generated yet. Relative paths resolve against this file's directory.
+#
+# Ghostty has no reload signal: new windows pick up new colours immediately,
+# existing ones need the "Reload configuration" action (ctrl+shift+,).
+#
+# To opt out entirely: delete this line AND [templates.ghostty] from
+# ~/.config/matugen/config.toml.
+# ---------------------------------------------------------------------------
+config-file = ?colors-matugen
