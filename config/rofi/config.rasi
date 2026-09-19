@@ -1,0 +1,43 @@
+/* rofi configuration
+ *
+ * The previous version of this file carried ~150 lines of commented-out
+ * defaults. They're all reproducible on demand with `rofi -dump-config`, so
+ * they've been dropped in favour of something you can actually read.
+ * Theme property reference: man 5 rofi-theme
+ */
+
+configuration {
+    timeout {
+        action: "kb-cancel";
+        delay:  0;
+    }
+
+    filebrowser {
+        directories-first: true;
+        sorting-method:    "name";
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * THEME LOADING - this was the bug.
+ *
+ * Per man 5 rofi-theme, "Multiple file handling":
+ *     import : Import and parse a second file.
+ *     theme  : DISCARD theme, and load file as a fresh theme.
+ *
+ * The old config had TWO @theme lines. The second one threw spotlight-dark
+ * away wholesale and left rofi running on nothing but the four colour rules
+ * in colors-matugen.rasi - no layout, no sizing, no padding.
+ *
+ * So: @theme for the base theme, then ?import to merge the generated colours
+ * on top. ?import (rather than @import) does not abort parsing if the file
+ * doesn't exist yet, e.g. before matugen has ever run.
+ *
+ * `~` is expanded by rofi, so the hardcoded /home/lol paths are gone too.
+ * ------------------------------------------------------------------------ */
+
+@theme "~/.local/share/rofi/themes/spotlight-dark.rasi"
+
+?import "~/.config/rofi/colors-matugen.rasi"
+
+/* Put any of your own tweaks BELOW this line - last parsed value wins. */

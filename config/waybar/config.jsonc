@@ -1,0 +1,154 @@
+{
+    "layer": "top",
+    "position": "top",
+
+    // Reloads the CSS whenever style.css or anything it imports changes.
+    // That covers waybar-colors.css, so matugen colour changes now land
+    // without any external signal. auto-reload.sh only has to care about
+    // this file and the media scripts.
+    "reload_style_on_change": true,
+
+    "modules-left": ["hyprland/workspaces", "group/media"],
+    "modules-center": ["clock"],
+    "modules-right": [
+        "hyprland/submap",
+        "group/volume",
+        "battery",
+        "bluetooth",
+        "network",
+        "cpu",
+        "memory"
+    ],
+
+    "hyprland/workspaces": {
+        "on-scroll-up": "hyprctl dispatch workspace e+1",
+        "on-scroll-down": "hyprctl dispatch workspace e-1"
+    },
+
+    "battery": {
+        "interval": 60,
+        "format": "{capacity}%",
+        "format-charging": "{capacity}% ⚡",
+        "tooltip-format": "{timeTo}\n{power:0.1f}W",
+        "states": {
+            "warning": 30,
+            "critical": 15
+        }
+    },
+
+    "bluetooth": {
+        "format": "",
+        "format-disabled": "", // an empty format hides the module
+        "format-connected": " {num_connections}",
+        "tooltip-format": "{controller_alias}\t{controller_address}",
+        "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{device_enumerate}",
+        "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
+        "on-click": "blueman-manager"
+    },
+
+    "cpu": {
+        "interval": 10,
+        "format": " {usage}%",
+        "max-length": 10,
+        // Dropped the leading "exec " - waybar already runs these through a
+        // shell, so it was a no-op verb sitting in front of every command.
+        "on-click": "kitty --title=btop -e btop"
+    },
+
+    "memory": {
+        "interval": 30,
+        "format": " {percentage}%",
+        "tooltip-format": "{used:0.1f}G/{total:0.1f}G used",
+        "on-click": "kitty --title=htop -e htop"
+    },
+
+    "network": {
+        "format": "",
+        "format-wifi": "",
+        "format-ethernet": "",
+        "format-disconnected": "󰤭",
+        "tooltip-format": "{ifname} via {gwaddr} 󰊗",
+        "tooltip-format-wifi": "{essid} ({signalStrength}%) ",
+        "tooltip-format-ethernet": "{ifname} ",
+        "tooltip-format-disconnected": "󰖪",
+        "max-length": 50,
+        "on-click": "kitty --title=nmtui -e nmtui"
+    },
+
+    "clock": {
+        "format": "󰥔 {:%a, %d %b %I:%M %p}",
+        "format-alt": "󰥔 {:%Y-%m-%d %H:%M:%S}",
+        "tooltip-format": "<tt><small>{calendar}</small></tt>",
+        "calendar": {
+            "mode": "month",
+            "on-scroll": 1,
+            "format": {
+                // NOTE: waybar's calendar format takes a literal colour here,
+                // so this one can't come from matugen. Keep it in sync with
+                // @highlight in waybar-colors.css by hand, or drop the span.
+                "today": "<span color='#75f1fa'><b>{}</b></span>"
+            }
+        },
+        "actions": {
+            "on-click-right": "mode",
+            "on-scroll-up": "shift_up",
+            "on-scroll-down": "shift_down"
+        },
+        "on-click": "firefox --app=https://calendar.google.com"
+    },
+
+    "pulseaudio": {
+        "format": "{volume}% {icon}",
+        "format-muted": "",
+        "format-icons": {
+            "default": ["\uf027", "\uf028"]
+        },
+        "scroll-step": 1,
+        "ignored-sinks": ["Easy Effects Sink"],
+        "on-click": "pavucontrol",
+        "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+    },
+
+    "pulseaudio/slider": {
+        "min": 0,
+        "max": 100,
+        "orientation": "horizontal"
+    },
+
+    "group/volume": {
+        "orientation": "horizontal",
+        "modules": ["pulseaudio", "pulseaudio/slider"]
+    },
+
+    // media-time was missing from this list, which is why the elapsed/total
+    // readout never appeared despite the script and the CSS both existing.
+    "group/media": {
+        "orientation": "horizontal",
+        "modules": [
+            "custom/media-animation",
+            "custom/media-now-playing",
+            "custom/media-time"
+        ]
+    },
+
+    "custom/media-now-playing": {
+        "exec": "~/.config/waybar/custom_modules/media/media-now-playing.sh",
+        "return-type": "json",
+        "escape": true, // keeps & and < in track titles from breaking pango
+        "tooltip": true,
+        "on-click": "playerctl -i playerctld play-pause",
+        "on-click-middle": "playerctl -i playerctld previous",
+        "on-click-right": "playerctl -i playerctld next"
+    },
+
+    "custom/media-animation": {
+        "exec": "~/.config/waybar/custom_modules/media/media-animation.sh",
+        "tooltip": false
+    },
+
+    "custom/media-time": {
+        "exec": "~/.config/waybar/custom_modules/media/media-time.sh",
+        "interval": 1,
+        "tooltip": false
+    }
+}
