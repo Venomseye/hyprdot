@@ -1,13 +1,49 @@
--- This is an example Hyprland Lua config file.
--- Refer to the wiki for more information.
+-- Hyprland configuration
 -- https://wiki.hypr.land/Configuring/Start/
+--
+-- CHANGES FROM THE PREVIOUS VERSION ARE MARKED WITH:  -- [FIX] / -- [NEW]
 
--- Please note not all available settings / options are set here.
--- For a full list, see the wiki
+------------------------
+---- WALLPAPER COLOURS -
+------------------------
 
--- You can (and should!!) split this configuration into multiple files
--- Create your files separately and then require them like this:
--- require("myColors")
+-- [NEW] Border colours follow the wallpaper via matugen.
+--
+-- The palette below is the fallback. matugen overwrites
+-- ~/.config/hypr/colors-matugen.lua on every wallpaper change; we load it with
+-- a guarded pcall(dofile, ...) so a missing or malformed generated file can
+-- never take your whole session down - you just keep these defaults.
+--
+-- dofile (rather than require) is deliberate: require caches modules, so
+-- `hyprctl reload` would keep serving the stale palette.
+
+local palette = {
+	primary = "#33ccff",
+	secondary = "#00ff99",
+	tertiary = "#a277ff",
+	outline = "#595959",
+	surface = "#18181b",
+	error = "#e35149",
+}
+
+do
+	local generated = os.getenv("HOME") .. "/.config/hypr/colors-matugen.lua"
+	local ok, result = pcall(dofile, generated)
+	if ok and type(result) == "table" then
+		for key, value in pairs(result) do
+			if type(value) == "string" then
+				palette[key] = value
+			end
+		end
+	end
+end
+
+-- "#75f1fa" + "ee"  ->  "rgba(75f1faee)"
+-- The extra parens around the gsub matter: gsub returns two values, and the
+-- second would otherwise be consumed as a format argument.
+local function rgba(hex, alpha)
+	return "rgba(" .. (hex:gsub("^#", "")) .. alpha .. ")"
+end
 
 ------------------
 ---- MONITORS ----
@@ -40,7 +76,6 @@ hl.monitor({
 ---- MY PROGRAMS ----
 ---------------------
 
--- Set programs that you use
 local terminal = "kitty"
 local fileManager = "nautilus"
 local browser = "firefox"
@@ -60,12 +95,13 @@ local clipboardHistory = "cliphist list | rofi -dmenu | cliphist decode | wl-cop
 -------------------
 
 -- See https://wiki.hypr.land/Configuring/Basics/Autostart/
-
--- Autostart necessary processes (like notifications daemons, status bars, etc.)
--- Or execute your favorite apps at launch like this:
---
 hl.on("hyprland.start", function()
-	hl.exec_cmd("waybar & wpaperd -d")
+	-- [FIX] These used to be one string joined with `&`. Split up so a failure
+	-- in one doesn't swallow the other, and so wpaperd (which fires the matugen
+	-- hook) starts first - waybar then reads freshly generated colours.
+	hl.exec_cmd("wpaperd -d")
+	hl.exec_cmd("waybar")
+
 	hl.exec_cmd("hyprctl setcursor Bibata-Modern-Ice 30")
 	hl.exec_cmd("playerctld daemon")
 	hl.exec_cmd("wl-paste --watch cliphist store")
@@ -82,28 +118,40 @@ end)
 
 -- See https://wiki.hypr.land/Configuring/Advanced-and-Cool/Environment-variables/
 
-hl.env("XCURSOR_SIZE", "24")
+-- [FIX] These were 24 / 30 / 30, which gave XWayland apps a visibly smaller
+-- cursor than native Wayland ones. All three must agree - if you change one,
+-- change the setcursor line in the autostart block too.
+hl.env("XCURSOR_SIZE", "30")
 hl.env("HYPRCURSOR_SIZE", "30")
+
 hl.env("QT_QPA_PLATFORMTHEME", "qt5ct")
+-- If you run Qt6 apps and have qt6ct installed, use this instead:
+-- hl.env("QT_QPA_PLATFORMTHEME", "qt6ct")
 
 -----------------------
 ----- PERMISSIONS -----
 -----------------------
 
 -- See https://wiki.hypr.land/Configuring/Advanced-and-Cool/Permissions/
--- Please note permission changes here require a Hyprland restart and are not applied on-the-fly
--- for security reasons
+-- Permission changes require a full Hyprland RESTART. They are deliberately
+-- not applied on a reload, for security reasons.
 
 hl.config({
-  ecosystem = {
-    enforce_permissions = true,
-  },
+	ecosystem = {
+		enforce_permissions = true,
+	},
 })
 
 hl.permission("/usr/(bin|local/bin)/grim", "screencopy", "allow")
 hl.permission("/usr/(lib|libexec|lib64)/xdg-desktop-portal-hyprland", "screencopy", "allow")
 hl.permission("/usr/(bin|local/bin)/hyprpm", "plugin", "allow")
 hl.permission("/usr/(bin|local/bin)/satty", "screencopy", "allow")
+
+-- [FIX] This was missing. hyprlock.conf uses `path = screenshot` for its
+-- background, which is a screencopy request. With enforce_permissions on and
+-- no grant here, the lock screen renders black (or throws a permission popup
+-- you can't interact with, because the screen is locked).
+hl.permission("/usr/(bin|local/bin)/hyprlock", "screencopy", "allow")
 
 -----------------------
 ---- LOOK AND FEEL ----
@@ -117,9 +165,13 @@ hl.config({
 
 		border_size = 3,
 
+		-- [NEW] Borders now follow the wallpaper palette (see top of file).
 		col = {
-			active_border = { colors = { "rgba(33ccffee)", "rgba(00ff99ee)" }, angle = 45 },
-			inactive_border = "rgba(595959aa)",
+			active_border = {
+				colors = { rgba(palette.primary, "ee"), rgba(palette.secondary, "ee") },
+				angle = 45,
+			},
+			inactive_border = rgba(palette.outline, "aa"),
 		},
 
 		-- Set to true to enable resizing windows by clicking and dragging on borders and gaps
@@ -235,8 +287,12 @@ hl.config({
 
 hl.config({
 	misc = {
-		force_default_wallpaper = 0, -- Set to 0 or 1 to disable the anime mascot wallpapers
-		disable_hyprland_logo = false, -- If true disables the random hyprland logo / anime girl background. :(
+		-- [FIX] These two contradicted each other: force_default_wallpaper = 0
+		-- means "no default wallpaper", but disable_hyprland_logo = false left
+		-- the logo drawing on top of it. wpaperd owns the wallpaper, so both
+		-- should be off.
+		force_default_wallpaper = 0,
+		disable_hyprland_logo = true,
 	},
 })
 
@@ -289,6 +345,12 @@ local secondMod = "SUPER + SHIFT" -- Sets "Windows" + "SHIFT" key as second modi
 -- Example binds, see https://wiki.hypr.land/Configuring/Basics/Binds/ for more
 hl.bind(mainMod .. " + Q", hl.dsp.window.close())
 
+-- [NEW] Lock the screen on demand. hypridle only locked on a 5 minute timeout,
+-- so there was no way to lock deliberately before walking away.
+-- loginctl (rather than calling hyprlock directly) keeps systemd's session
+-- state in sync, which is what before_sleep_cmd in hypridle.conf relies on.
+hl.bind(mainMod .. " + L", hl.dsp.exec_cmd("loginctl lock-session"))
+
 -- rofi menus
 hl.bind(mainMod .. " + CTRL + RETURN", hl.dsp.exec_cmd(launcher))
 hl.bind(mainMod .. " + Space", hl.dsp.exec_cmd(runner))
@@ -301,7 +363,6 @@ hl.bind(mainMod .. " + B", hl.dsp.exec_cmd(browser))
 hl.bind(mainMod .. " + RETURN", hl.dsp.exec_cmd(terminal))
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))
 --hl.bind(mainMod .. " + M", hl.dsp.exec_cmd(music))
---hl.bind(mainMod .. " + N", hl.dsp.exec_cmd(notion))
 hl.bind(mainMod .. " + A", hl.dsp.exec_cmd(ai))
 
 hl.bind(mainMod .. " + P", hl.dsp.window.pseudo()) -- dwindle only
@@ -358,9 +419,15 @@ hl.bind(mainMod .. " + CTRL + RIGHT", hl.dsp.window.move({ direction = "right" }
 hl.bind(mainMod .. " + CTRL + UP", hl.dsp.window.move({ direction = "up" }))
 hl.bind(mainMod .. " + CTRL + DOWN", hl.dsp.window.move({ direction = "down" }))
 
-
--- Toggle window maximization
+-- Toggle window maximization / true fullscreen.
+-- action defaults to "toggle" so it's fine to omit, matching your original bind.
+-- Known upstream quirk (Hyprland 0.55+, tracked in several open discussions):
+-- toggling out of maximized doesn't always restore the exact previous size on
+-- the scrolling layout, and gaps can stick at 0 after leaving true fullscreen.
+-- That's a compositor-side bug, not a config mistake - nothing to fix here.
 hl.bind(mainMod .. " + F", hl.dsp.window.fullscreen({ mode = "maximized" }))
+-- True fullscreen
+hl.bind(secondMod .. " + F", hl.dsp.window.fullscreen({ mode = "fullscreen" }))
 -- toggle floating
 hl.bind(secondMod .. " + T", hl.dsp.window.float({ action = "toggle" }))
 
@@ -374,17 +441,35 @@ end
 
 -- Example special workspace (scratchpad)
 hl.bind(mainMod .. " + S", hl.dsp.workspace.toggle_special("magic"))
-hl.bind(mainMod .. " + SHIFT + S", hl.dsp.window.move({ workspace = "special:magic" }))
+-- [FIX] was written as mainMod .. " + SHIFT + S", which is the same chord as
+-- secondMod .. " + S". Spelled consistently now so it's greppable.
+hl.bind(secondMod .. " + S", hl.dsp.window.move({ workspace = "special:magic" }))
 
 -- Scroll through existing workspaces with mainMod + scroll
 hl.bind(mainMod .. " + mouse_down", hl.dsp.focus({ workspace = "e+1" }))
 hl.bind(mainMod .. " + mouse_up", hl.dsp.focus({ workspace = "e-1" }))
 
 -- Resize windows with secondMod + arrow
-hl.bind(secondMod .. " + right", hl.dsp.window.resize({ x = 100, y = 0, relative = true }), { repeating = true, description = "Increase window width with keyboard" })
-hl.bind(secondMod .. " + left", hl.dsp.window.resize({ x = -100, y = 0, relative = true }), { repeating = true, description = "Reduce window width with keyboard" })
-hl.bind(secondMod .. " + down", hl.dsp.window.resize({ x = 0, y = 100, relative = true }), { repeating = true, description = "Increase window height with keyboard" })
-hl.bind(secondMod .. " + up", hl.dsp.window.resize({ x = 0, y = -100, relative = true }), { repeating = true, description = "Reduce window height with keyboard" })
+hl.bind(
+	secondMod .. " + right",
+	hl.dsp.window.resize({ x = 100, y = 0, relative = true }),
+	{ repeating = true, description = "Increase window width with keyboard" }
+)
+hl.bind(
+	secondMod .. " + left",
+	hl.dsp.window.resize({ x = -100, y = 0, relative = true }),
+	{ repeating = true, description = "Reduce window width with keyboard" }
+)
+hl.bind(
+	secondMod .. " + down",
+	hl.dsp.window.resize({ x = 0, y = 100, relative = true }),
+	{ repeating = true, description = "Increase window height with keyboard" }
+)
+hl.bind(
+	secondMod .. " + up",
+	hl.dsp.window.resize({ x = 0, y = -100, relative = true }),
+	{ repeating = true, description = "Reduce window height with keyboard" }
+)
 
 -- Move/resize windows with mainMod + LMB/RMB and dragging
 hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })
@@ -402,6 +487,12 @@ hl.define_submap("⏻", function()
 		hl.dispatch(hl.dsp.submap("reset"))
 	end)
 
+	-- lock
+	hl.bind("l", function()
+		hl.dispatch(hl.dsp.exec_cmd("loginctl lock-session"))
+		hl.dispatch(hl.dsp.submap("reset"))
+	end)
+
 	-- shutdown
 	hl.bind("p", hl.dsp.exec_cmd("hyprshutdown --post-cmd 'systemctl poweroff'"))
 
@@ -416,14 +507,32 @@ hl.define_submap("⏻", function()
 end)
 
 -- wallpaper binds
-hl.bind(secondMod .. " + W", hl.dsp.submap(""))
+--
+-- [FIX] This submap's name was an empty/invisible glyph (a Nerd Font icon
+-- codepoint that doesn't render in most contexts - it shows as truly blank).
+-- That meant waybar's #submap indicator, whose entire job is to warn you a
+-- submap is active, displayed NOTHING while you were in here. If you ever
+-- fat-fingered SUPER+SHIFT+W (or a stuck/ghost modifier key fired it for
+-- you), you'd land in a mode where l/h/space stop typing and start changing
+-- wallpapers, with zero visible sign why. Renamed to plain text so it's
+-- unmissable in the bar. Escape still exits back to normal typing either way.
+hl.bind(secondMod .. " + W", hl.dsp.submap("wallpaper"))
 
-hl.define_submap("", function()
+hl.define_submap("wallpaper", function()
+	-- [FIX] wpaperctl's real subcommands are "next-wallpaper" / "previous-wallpaper" /
+	-- "toggle-pause-wallpaper" (confirmed against `man wpaperctl`). The original
+	-- config called plain "next" / "previous", which don't exist as wpaperctl
+	-- subcommands - the command failed silently on every press, so these two
+	-- binds have likely never actually changed the wallpaper.
+
 	-- next wallpaper
-	hl.bind("l", hl.dsp.exec_cmd("wpaperctl next"))
+	hl.bind("l", hl.dsp.exec_cmd("wpaperctl next-wallpaper"))
 
 	-- previous wallpaper
-	hl.bind("h", hl.dsp.exec_cmd("wpaperctl previous"))
+	hl.bind("h", hl.dsp.exec_cmd("wpaperctl previous-wallpaper"))
+
+	-- pause/resume automatic rotation
+	hl.bind("space", hl.dsp.exec_cmd("wpaperctl toggle-pause-wallpaper"))
 
 	-- Use `reset` to go back to the global submap
 	hl.bind("escape", hl.dsp.submap("reset"))
@@ -440,38 +549,36 @@ hl.bind(
 	hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"),
 	{ locked = true, repeating = true }
 )
-hl.bind(
-	"XF86AudioMute",
-	hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"),
-	{ locked = true, repeating = true }
-)
-hl.bind(
-	"XF86AudioMicMute",
-	hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"),
-	{ locked = true, repeating = true }
-)
+hl.bind("XF86AudioMute", hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"), { locked = true })
+hl.bind("XF86AudioMicMute", hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"), { locked = true })
 hl.bind("XF86MonBrightnessUp", hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%+"), { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%-"), { locked = true, repeating = true })
 
--- Requires playerctl
-hl.bind("XF86AudioNext", hl.dsp.exec_cmd("playerctl next"), { locked = true })
-hl.bind("XF86AudioPause", hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
-hl.bind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
-hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl previous"), { locked = true })
+-- Requires playerctl.
+-- -i playerctld keeps the daemon's own proxy player out of the selection; it
+-- mirrors whatever is actually playing, so acting on it directly is redundant.
+hl.bind("XF86AudioNext", hl.dsp.exec_cmd("playerctl -i playerctld next"), { locked = true })
+hl.bind("XF86AudioPause", hl.dsp.exec_cmd("playerctl -i playerctld play-pause"), { locked = true })
+hl.bind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl -i playerctld play-pause"), { locked = true })
+hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl -i playerctld previous"), { locked = true })
 
 -- Screenshots (requires grim, slurp, satty)
 -- Full screen -> saved + copied to clipboard
 hl.bind(
 	"PRINT",
 	hl.dsp.exec_cmd(
-		"mkdir -p ~/Pictures/Screenshots && grim - | tee ~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png | wl-copy"
+		"mkdir -p ~/Pictures/Screenshots && "
+			.. "f=~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png && "
+			.. "grim - | tee \"$f\" | wl-copy && "
+			.. "notify-send 'Screenshot saved' \"$(basename \"$f\")\""
 	)
 )
 -- Region select with annotation -> saved via satty's save dialog
 hl.bind(
 	mainMod .. " + CTRL + S",
 	hl.dsp.exec_cmd(
-		"mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" - | satty --filename - --output-filename ~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+		"mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" - | "
+			.. "satty --filename - --output-filename ~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
 	)
 )
 
@@ -487,8 +594,6 @@ hl.workspace_rule({
 
 -- See https://wiki.hypr.land/Configuring/Basics/Window-Rules/
 -- and https://wiki.hypr.land/Configuring/Basics/Workspace-Rules/
-
--- Example window rules that are useful
 
 hl.window_rule({
 	-- Ignore maximize requests from all apps. You'll probably like this.
