@@ -1,32 +1,46 @@
 #!/usr/bin/env bash
+#
+# Prints "Title - Artist" for the active player, or nothing.
+# zscroll calls this repeatedly to decide what to scroll.
+#
+# Keeps a small cache so that a player which briefly fails to answer (Spotify
+# does this while switching tracks) shows the last known title instead of
+# blinking the whole module out of existence.
 
-DIR="$(dirname "$0")"
-CACHE_FILE="/tmp/waybar-media-title-cache"
+set -uo pipefail
 
-IFS=$'\t' read -r player status <<< "$("$DIR/get-active-player.sh")"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SEP=$'\x1f'
+CACHE_FILE="${XDG_RUNTIME_DIR:-/tmp}/waybar-media-title.cache"
 
-if [ -z "$player" ]; then
+IFS="$SEP" read -r player _status < <("$DIR/get-active-player.sh") || player=""
+
+if [ -z "${player:-}" ]; then
     rm -f "$CACHE_FILE"
     exit 0
 fi
 
-info=$(playerctl -p "$player" metadata --format '{{ title }} - {{ artist }}' 2>/dev/null)
+fetch() {
+    playerctl -p "$player" metadata --format '{{ title }} - {{ artist }}' 2>/dev/null
+}
 
-if [ -z "$info" ]; then
+info=$(fetch)
+
+if [ -z "$info" ] || [ "$info" = " - " ]; then
     sleep 0.1
-    info=$(playerctl -p "$player" metadata --format '{{ title }} - {{ artist }}' 2>/dev/null)
+    info=$(fetch)
 fi
 
-if [ -n "$info" ]; then
-    echo "$player:$info" > "$CACHE_FILE"
-    echo "$info"
+if [ -n "$info" ] && [ "$info" != " - " ]; then
+    printf '%s%s%s\n' "$player" "$SEP" "$info" > "$CACHE_FILE"
+    printf '%s\n' "$info"
     exit 0
 fi
 
-cached=$(cat "$CACHE_FILE" 2>/dev/null)
-cached_player="${cached%%:*}"
-cached_value="${cached#*:}"
-
-if [ "$cached_player" = "$player" ] && [ -n "$cached_value" ]; then
-    echo "$cached_value"
+# Fall back to the cached title, but only if it belongs to this same player.
+if [ -r "$CACHE_FILE" ]; then
+    IFS="$SEP" read -r cached_player cached_value < "$CACHE_FILE" || true
+    if [ "${cached_player:-}" = "$player" ] && [ -n "${cached_value:-}" ]; then
+        printf '%s\n' "$cached_value"
+    fi
 fi

@@ -1,25 +1,72 @@
 [config]
+# ---------------------------------------------------------------------------
+# THE FIX for: "Error: 0: Failed to get source color / IO error (os error 5)"
+#
+# matugen 4.0 added an interactive "Select the color you want to use as source
+# color" prompt that appears whenever an image yields several good candidates.
+# The wallpaper hook is run by wpaperd, which has no usable terminal, so that
+# prompt's read fails with EIO and matugen aborts before writing any template.
+#
+# Pinning the index here makes matugen fully non-interactive.
+#   0 = most dominant colour, 1 = second most dominant, ... up to 4.
+# (The --source-color-index CLI flag overrides this if you ever pass it.)
+# ---------------------------------------------------------------------------
+source_color_index = 0
+# Confirmed against matugen's own changelog (v4.2.0: "add source_color_index
+# to config") and the CLI help text ("to mimick the old version color picking
+# use --source-color-index 0"). I'm intentionally NOT adding other [config]
+# keys like a "prefer" or "caching" toggle here: matugen does have a --prefer
+# CLI flag (added in 4.1), but I could not confirm its exact config.toml key
+# name/casing against an authoritative source, and guessing wrong here is
+# exactly the kind of mistake that broke your wallpaper hook in the first
+# place. If you want that behaviour, check `matugen image --help` on your
+# installed version and add the confirmed key yourself.
+
 # wpaperd is already the wallpaper daemon - matugen should only generate
-# colors here, not try to set the wallpaper itself.
+# colours here, not try to set the wallpaper itself.
 [config.wallpaper]
 set = false
+
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
 
 [templates.kitty]
 input_path = '~/.config/matugen/templates/kitty-colors.template'
 output_path = '~/.config/kitty/colors-matugen.conf'
-# No post_hook needed - kitty has auto_reload_config on by default and will
-# pick up changes to colors-matugen.conf automatically since it's included.
+# WAS BROKEN: the old comment here claimed kitty has auto_reload_config on by
+# default. kitty has no such option - running instances keep their old palette
+# until you press ctrl+shift+f5 or send them SIGUSR1. So: send SIGUSR1.
+# `|| true` keeps matugen happy when no kitty is running.
+post_hook = 'pkill -USR1 -x kitty || true'
+
+[templates.ghostty]
+input_path = '~/.config/matugen/templates/ghostty-colors.template'
+output_path = '~/.config/ghostty/colors-matugen'
+# Ghostty has no reload signal; new windows pick the colours up, and existing
+# windows get them via the "Reload configuration" action (ctrl+shift+,).
 
 [templates.mako]
 input_path = '~/.config/matugen/templates/mako-colors.template'
 output_path = '~/.config/mako/mako-colors'
-post_hook = 'makoctl reload'
+post_hook = 'makoctl reload || true'
 
 [templates.rofi]
 input_path = '~/.config/matugen/templates/rofi-colors.template'
 output_path = '~/.config/rofi/colors-matugen.rasi'
+# No hook needed - rofi parses its config fresh on every launch.
+
+[templates.hyprland]
+input_path = '~/.config/matugen/templates/hyprland-colors.template'
+output_path = '~/.config/hypr/colors-matugen.lua'
+# hyprland.lua loads this with a guarded dofile(), so a missing or malformed
+# file falls back to the built-in palette instead of breaking your session.
+post_hook = 'hyprctl reload || true'
 
 [templates.waybar]
 input_path = '~/.config/matugen/templates/waybar-colors.template'
 output_path = '~/.config/waybar/waybar-colors.css'
-post_hook = 'killall -SIGUSR2 waybar'
+# Redundant if your waybar supports "reload_style_on_change" (set in
+# config.jsonc), but harmless and keeps older waybar builds working.
+post_hook = 'pkill -USR2 -x waybar || true'
