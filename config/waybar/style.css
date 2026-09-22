@@ -57,21 +57,31 @@ tooltip label {
   font-weight: 700;
 }
 
-#submap,
 #workspaces button.urgent {
   background: @urgent;
   color: @on-urgent;
 }
 
 /* --- right-hand pills ---------------------------------------------------- */
+/*
+   Every module below has an on-click handler (see config.jsonc), which means
+   waybar/GTK renders it as a clickable button - and GTK buttons carry their
+   OWN default hover/pressed styling from whatever system GTK theme happens
+   to be installed, completely separate from this stylesheet. Without an
+   explicit :hover/:active rule here, that raw system-theme chrome (often a
+   totally different, unrelated colour) shows through on mouseover and press.
+   That's what looked like the clock "changing to a different style" on hover
+   and click - it wasn't this stylesheet doing it, it was the absence of one.
+   An ID selector + pseudo-class (#clock:hover) has higher specificity than
+   the theme's own generic `button:hover`, so these explicit rules win
+   regardless of which GTK theme is installed.
+*/
 
-#submap,
 #battery,
 #bluetooth,
 #network,
 #cpu,
 #memory,
-#clock,
 #volume {
   border-radius: 8px;
   padding: 5px 8px;
@@ -79,8 +89,57 @@ tooltip label {
   margin: 5px 10px 5px 0px;
 }
 
+#bluetooth:hover,
+#network:hover,
+#cpu:hover,
+#memory:hover,
+#volume:hover {
+  background: @dark-7;
+  box-shadow: none;
+  border: none;
+}
+
+#bluetooth:active,
+#network:active,
+#cpu:active,
+#memory:active,
+#volume:active {
+  background: @dark-6;
+  box-shadow: none;
+  border: none;
+}
+
+/* Active Hyprland submap indicator (power / wallpaper menus).
+   CORRECTION: this used to be grouped into both the block above (giving it
+   @dark-8) and the .urgent block below it (giving it @on-urgent text) - two
+   rules of equal specificity fighting over the same element, with the later
+   one silently winning on background while the earlier one's text colour
+   survived unopposed. Net result: grey background with urgent-red text
+   colour, by accident, matching neither. Split into its own rule using the
+   wallpaper's actual accent colour, since a submap being active isn't an
+   error state - it doesn't need the same red as a genuinely urgent workspace. */
+#submap {
+  border-radius: 8px;
+  padding: 5px 10px;
+  background: @highlight;
+  color: @on-highlight;
+  margin: 5px 10px 5px 0px;
+  font-weight: 700;
+}
+
+/* #clock used to be listed in the shared pills block above (giving it
+   background: @dark-8) AND have this separate rule setting background:
+   transparent - two rules of equal specificity fighting over the same
+   property, the same cascade-conflict bug pattern the #submap rule above
+   had. Pulled out of the shared block and consolidated into one place.
+   [UPDATE] The clock no longer has an on-click handler, so waybar won't
+   render it as a clickable button and it won't enter GTK's hover/active
+   states from mouse interaction - the :hover/:active rules from when it
+   briefly did are removed as dead weight. */
 #clock {
   background: transparent;
+  padding: 5px 8px;
+  margin: 5px 10px 5px 0px;
 }
 
 #battery.warning {
@@ -100,7 +159,51 @@ tooltip label {
   color: @urgent;
 }
 
+/* #pulseaudio.muted is a real class waybar applies automatically when the
+   default sink is muted (confirmed against the waybar-pulseaudio man page's
+   own STYLE section). format-muted already swaps in a distinct mute icon
+   (fa-volume-off, U+F026 - verified back when the icons were restored), but
+   with no colour change that swap is subtle and easy to miss at a glance.
+   This makes muted state impossible to miss without needing to read the
+   icon shape closely. */
+#pulseaudio.muted {
+  color: @urgent;
+}
+
 /* --- volume slider ------------------------------------------------------- */
+
+/* #pulseaudio is the clickable leaf inside the #volume group (see the note
+   above the pills block) - its own click handler means it needs its own
+   explicit hover/active reset too, separate from the group wrapper. */
+#pulseaudio:hover,
+#pulseaudio:active {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+
+/* Mic status - a genuinely separate module (see custom/mic in config.jsonc)
+   rather than embedded text in #pulseaudio, specifically so this CAN use a
+   real CSS rule with the real @urgent variable. #pulseaudio.muted already
+   proved this works and tracks matugen automatically; the previous
+   Pango-span approach for the mic could not do the same; a literal colour
+   baked into a JSON string has no way to know when matugen regenerates
+   @urgent for a new wallpaper. This does. */
+#custom-mic {
+  color: @text;
+  margin-left: 8px;
+}
+
+#custom-mic.muted {
+  color: @urgent;
+}
+
+#custom-mic:hover,
+#custom-mic:active {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
 
 #pulseaudio-slider {
   padding: 0px;
@@ -126,7 +229,12 @@ tooltip label {
 }
 
 #pulseaudio-slider highlight {
-  min-width: 10px;
+  /* [FIX] Was `min-width: 10px`. That forces the filled portion to always
+     render at least 10px wide, no matter what - including at 0% volume,
+     where GTK would otherwise correctly collapse it to zero. That's the
+     small blue sliver you saw sitting there even though the "0%" text next
+     to it was already correct - the number was right, the bar just had a
+     hard floor under it stopping it from ever visually reaching empty. */
   border-radius: 5px;
   background: @highlight;
 }
@@ -170,6 +278,15 @@ tooltip label {
   /* zscroll pads to 20 chars, so this stops the neighbouring modules jumping
      left and right as the title scrolls. */
   min-width: 150px;
+}
+
+/* Has on-click/on-click-middle/on-click-right (play-pause/previous/next) -
+   same GTK-button-chrome exposure as every other clickable module above. */
+#custom-media-now-playing:hover,
+#custom-media-now-playing:active {
+  background: @dark-7;
+  box-shadow: none;
+  border: none;
 }
 
 #custom-media-time {

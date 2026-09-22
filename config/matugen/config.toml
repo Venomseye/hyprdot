@@ -24,8 +24,21 @@ source_color_index = 0
 
 # wpaperd is already the wallpaper daemon - matugen should only generate
 # colours here, not try to set the wallpaper itself.
-[config.wallpaper]
-set = false
+#
+# [FIX] There used to be a [config.wallpaper] table here with just
+# `set = false`. Confirmed via a real error from your installed matugen:
+#     Error: Failed to read config file.
+#     TOML parse error at line 27: missing field `command`
+# matugen's wallpaper table requires `command` unconditionally once the
+# table exists at all - `set = false` only controls whether that command
+# gets RUN, not whether it needs to be present for the file to parse. This
+# was in your very first upload, before I ever touched the file - it likely
+# only started erroring now because matugen itself got updated to a version
+# that enforces this more strictly. Since the actual goal is "matugen should
+# do nothing about wallpaper, ever," omitting the table entirely is the
+# correct fix (confirmed against matugen's own current config wiki page:
+# wallpaper handling is opt-in, off if the table is never mentioned) rather
+# than filling in a placeholder `command` that would never be reached.
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +77,39 @@ output_path = '~/.config/hypr/colors-matugen.lua'
 # file falls back to the built-in palette instead of breaking your session.
 post_hook = 'hyprctl reload || true'
 
+[templates.gtk3]
+input_path = '~/.config/matugen/templates/gtk-colors.template'
+output_path = '~/.config/gtk-3.0/colors.css'
+# {{mode}} resolves to "dark" or "light" depending on how you run matugen.
+# Toggling the theme off then back on is the standard, documented way to
+# force GTK3 to actually re-read it - GTK3 doesn't otherwise notice that an
+# already-set theme's underlying files changed.
+# Requires adw-gtk3 installed and active (see README) - without it, GTK3
+# apps use their own theme's own colours, which don't reference these names
+# at all, and this whole file has nothing to override.
+post_hook = 'gsettings set org.gnome.desktop.interface gtk-theme ""; gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3-{{mode}}'
+
+[templates.gtk4]
+input_path = '~/.config/matugen/templates/gtk-colors.template'
+output_path = '~/.config/gtk-4.0/colors.css'
+# No post_hook: there is no reliable, general "reload live" mechanism for
+# GTK4/libadwaita apps - they read gtk.css once at process start. New colours
+# apply to newly-opened GTK4 apps immediately; already-running ones need to
+# be closed and reopened. This is a real GTK4 limitation, confirmed across
+# every source I found on this exact problem - not something a hook script
+# can paper over.
+
 [templates.waybar]
 input_path = '~/.config/matugen/templates/waybar-colors.template'
 output_path = '~/.config/waybar/waybar-colors.css'
-# Redundant if your waybar supports "reload_style_on_change" (set in
-# config.jsonc), but harmless and keeps older waybar builds working.
-post_hook = 'pkill -USR2 -x waybar || true'
+# [FIX] This used to send SIGUSR2 on every wallpaper change. I called it
+# "harmless" - it wasn't. SIGUSR2's default action is a full bar RESET, not
+# a style-only refresh, and hyprland/submap gets its displayed text from live
+# Hyprland IPC events. A full reset tears that module down and rebuilds it,
+# and the rebuilt instance has no way to know "we're still inside the
+# wallpaper submap right now" - it missed the event that said so, and won't
+# hear about it again until the next actual submap change. That's exactly
+# why the submap icon was vanishing the instant a wallpaper applied, even
+# though you hadn't pressed Escape. reload_style_on_change (config.jsonc)
+# already handles colour updates on its own, gently, without touching module
+# state - no signal needed here at all.

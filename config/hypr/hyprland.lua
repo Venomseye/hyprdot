@@ -477,10 +477,21 @@ hl.bind(mainMod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
 
 -- Submaps
 
--- power binds
-hl.bind(secondMod .. " + P", hl.dsp.submap("⏻"))
+-- power submap
+--
+-- Icon is fa-power-off (U+F011) - verified directly against Font Awesome's
+-- own reference (fontawesome.com/v4/icon/power-off), "Created: v1.0". It's
+-- one of the oldest, most universally-shipped glyphs in any Nerd Font build,
+-- old or new, which matters: Nerd Fonts v3.0 did a BREAKING renumbering of
+-- the newer Material Design icon set (old 4-digit codepoints moved to new
+-- 5-digit ones), so those are font-version-sensitive. Font Awesome's classic
+-- range (0xF000-0xF2FF) was untouched by that migration and has been stable
+-- since Font Awesome 1.0 - as close to a guaranteed-render icon as exists,
+-- and it matches the same icon family (Font Awesome) already used for
+-- bluetooth/cpu/memory/network/volume in waybar's config.jsonc.
+hl.bind(secondMod .. " + P", hl.dsp.submap(""))
 
-hl.define_submap("⏻", function()
+hl.define_submap("", function()
 	-- sleep
 	hl.bind("s", function()
 		hl.dispatch(hl.dsp.exec_cmd("systemctl suspend"))
@@ -506,19 +517,24 @@ hl.define_submap("⏻", function()
 	hl.bind("escape", hl.dsp.submap("reset"))
 end)
 
--- wallpaper binds
+-- wallpaper submap
 --
--- [FIX] This submap's name was an empty/invisible glyph (a Nerd Font icon
--- codepoint that doesn't render in most contexts - it shows as truly blank).
--- That meant waybar's #submap indicator, whose entire job is to warn you a
--- submap is active, displayed NOTHING while you were in here. If you ever
+-- [FIX] This submap's name was previously an empty/invisible glyph (a Nerd
+-- Font icon codepoint that doesn't render in most contexts). That meant
+-- waybar's #submap indicator - whose entire job is to warn you a submap is
+-- active - displayed NOTHING while you were in here. If you ever
 -- fat-fingered SUPER+SHIFT+W (or a stuck/ghost modifier key fired it for
 -- you), you'd land in a mode where l/h/space stop typing and start changing
--- wallpapers, with zero visible sign why. Renamed to plain text so it's
--- unmissable in the bar. Escape still exits back to normal typing either way.
-hl.bind(secondMod .. " + W", hl.dsp.submap("wallpaper"))
+-- wallpapers, with zero visible sign why.
+--
+-- Now using fa-picture-o / fa-image (U+F03E) - verified against Font
+-- Awesome's own reference (fontawesome.com/v4/icon/picture-o), "Created:
+-- v1.0", same stability reasoning as the power icon above, and the same
+-- icon family as the rest of waybar. Escape still exits back to normal
+-- typing regardless.
+hl.bind(secondMod .. " + W", hl.dsp.submap(""))
 
-hl.define_submap("wallpaper", function()
+hl.define_submap("", function()
 	-- [FIX] wpaperctl's real subcommands are "next-wallpaper" / "previous-wallpaper" /
 	-- "toggle-pause-wallpaper" (confirmed against `man wpaperctl`). The original
 	-- config called plain "next" / "previous", which don't exist as wpaperctl

@@ -41,3 +41,23 @@ configuration {
 ?import "~/.config/rofi/colors-matugen.rasi"
 
 /* Put any of your own tweaks BELOW this line - last parsed value wins. */
+
+/* [FIX] spotlight-dark.rasi anchors itself near the top of the screen at
+ * 32% width (its own "spotlight launcher" look). Overriding just the
+ * positioning here, not the width.
+ *
+ * Per rofi's own theme format (confirmed against rofi's upstream source,
+ * the commit that introduced this exact feature):
+ *   location: position   the anchor point ON THE MONITOR
+ *   anchor:   position   the anchor point ON THE WINDOW
+ * Setting both to "center" aligns the window's own centre to the monitor's
+ * centre - true dead-centre, not just "vertically centered at the same
+ * x-offset" or similar. x-offset/y-offset reset to 0 so nothing nudges it
+ * off that point afterward.
+ */
+window {
+    location: center;
+    anchor: center;
+    x-offset: 0px;
+    y-offset: 0px;
+}

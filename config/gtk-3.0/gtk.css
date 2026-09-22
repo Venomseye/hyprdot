@@ -1,0 +1,5 @@
+/* This line pulls in matugen's generated colours - must stay first so the
+   named colours below are defined before anything tries to use them. */
+@import 'colors.css';
+
+/* Add any of your own GTK3 CSS tweaks below this line. */
