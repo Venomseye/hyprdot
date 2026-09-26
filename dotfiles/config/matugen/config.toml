@@ -1,0 +1,159 @@
+[config]
+# ---------------------------------------------------------------------------
+# THE FIX for: "Error: 0: Failed to get source color / IO error (os error 5)"
+#
+# matugen 4.0 added an interactive "Select the color you want to use as source
+# color" prompt that appears whenever an image yields several good candidates.
+# The wallpaper hook is run by wpaperd, which has no usable terminal, so that
+# prompt's read fails with EIO and matugen aborts before writing any template.
+#
+# Pinning the index here makes matugen fully non-interactive.
+#   0 = most dominant colour, 1 = second most dominant, ... up to 4.
+# (The --source-color-index CLI flag overrides this if you ever pass it.)
+# ---------------------------------------------------------------------------
+source_color_index = 0
+# Confirmed against matugen's own changelog (v4.2.0: "add source_color_index
+# to config") and the CLI help text ("to mimick the old version color picking
+# use --source-color-index 0"). I'm intentionally NOT adding other [config]
+# keys like a "prefer" or "caching" toggle here: matugen does have a --prefer
+# CLI flag (added in 4.1), but I could not confirm its exact config.toml key
+# name/casing against an authoritative source, and guessing wrong here is
+# exactly the kind of mistake that broke your wallpaper hook in the first
+# place. If you want that behaviour, check `matugen image --help` on your
+# installed version and add the confirmed key yourself.
+
+# wpaperd is already the wallpaper daemon - matugen should only generate
+# colours here, not try to set the wallpaper itself.
+#
+# [FIX] There used to be a [config.wallpaper] table here with just
+# `set = false`. Confirmed via a real error from your installed matugen:
+#     Error: Failed to read config file.
+#     TOML parse error at line 27: missing field `command`
+# matugen's wallpaper table requires `command` unconditionally once the
+# table exists at all - `set = false` only controls whether that command
+# gets RUN, not whether it needs to be present for the file to parse. This
+# was in your very first upload, before I ever touched the file - it likely
+# only started erroring now because matugen itself got updated to a version
+# that enforces this more strictly. Since the actual goal is "matugen should
+# do nothing about wallpaper, ever," omitting the table entirely is the
+# correct fix (confirmed against matugen's own current config wiki page:
+# wallpaper handling is opt-in, off if the table is never mentioned) rather
+# than filling in a placeholder `command` that would never be reached.
+
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+
+[templates.kitty]
+input_path = '~/.config/matugen/templates/kitty-colors.template'
+output_path = '~/.config/kitty/colors-matugen.conf'
+# WAS BROKEN: the old comment here claimed kitty has auto_reload_config on by
+# default. kitty has no such option - running instances keep their old palette
+# until you press ctrl+shift+f5 or send them SIGUSR1. So: send SIGUSR1.
+# `|| true` keeps matugen happy when no kitty is running.
+post_hook = 'pkill -USR1 -x kitty || true'
+
+[templates.ghostty]
+input_path = '~/.config/matugen/templates/ghostty-colors.template'
+output_path = '~/.config/ghostty/colors-matugen'
+# Ghostty has no reload signal; new windows pick the colours up, and existing
+# windows get them via the "Reload configuration" action (ctrl+shift+,).
+
+[templates.mako]
+input_path = '~/.config/matugen/templates/mako-colors.template'
+output_path = '~/.config/mako/mako-colors'
+post_hook = 'makoctl reload || true'
+
+[templates.rofi]
+input_path = '~/.config/matugen/templates/rofi-colors.template'
+output_path = '~/.config/rofi/colors-matugen.rasi'
+# No hook needed - rofi parses its config fresh on every launch.
+
+[templates.hyprland]
+input_path = '~/.config/matugen/templates/hyprland-colors.template'
+output_path = '~/.config/hypr/colors-matugen.lua'
+# hyprland.lua loads this with a guarded dofile(), so a missing or malformed
+# file falls back to the built-in palette instead of breaking your session.
+post_hook = 'hyprctl reload || true'
+
+[templates.gtk3]
+input_path = '~/.config/matugen/templates/gtk-colors.template'
+output_path = '~/.config/gtk-3.0/colors.css'
+# {{mode}} resolves to "dark" or "light" depending on how you run matugen.
+# Toggling the theme off then back on is the standard, documented way to
+# force GTK3 to actually re-read it - GTK3 doesn't otherwise notice that an
+# already-set theme's underlying files changed.
+# Requires adw-gtk3 installed and active (see README) - without it, GTK3
+# apps use their own theme's own colours, which don't reference these names
+# at all, and this whole file has nothing to override.
+post_hook = 'gsettings set org.gnome.desktop.interface gtk-theme ""; gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3-{{mode}}'
+
+[templates.gtk4]
+input_path = '~/.config/matugen/templates/gtk-colors.template'
+output_path = '~/.config/gtk-4.0/colors.css'
+# No post_hook: there is no reliable, general "reload live" mechanism for
+# GTK4/libadwaita apps - they read gtk.css once at process start. New colours
+# apply to newly-opened GTK4 apps immediately; already-running ones need to
+# be closed and reopened. This is a real GTK4 limitation, confirmed across
+# every source I found on this exact problem - not something a hook script
+# can paper over.
+
+[templates.qt5ct]
+input_path = '~/.config/matugen/templates/qt-colors.template'
+output_path = '~/.config/qt5ct/colors/matugen.conf'
+# Themes Qt apps (Dolphin and similar) - confirmed as a KDE/Qt app, not GTK,
+# back when GTK theming was added, and left as a follow-up. Needs qt5ct
+# installed AND set as the active platform theme (QT_QPA_PLATFORMTHEME=qt5ct
+# is already set in hyprland.lua) AND qt5ct.conf pointed at this file - see
+# config/qt5ct/qt5ct.conf. Uses Qt's own built-in Fusion style, not a
+# separate style-engine package (Breeze/Kvantum/Darkly) - Fusion ships with
+# Qt itself, so no extra AUR dependency is needed just to make the colours
+# render. The 21-colour role mapping in qt-colors.template is a reasoned
+# judgement call, not a byte-verified official standard the way the GTK
+# template is - qt5ct's colour scheme format is documented (an ordered list
+# of 21 roles: window text, button background, bright, less bright, dark,
+# less dark, normal text, bright text, button text, normal background,
+# window, shadow, highlight, highlighted text, link, visited link, alternate
+# background, default, tooltip background, tooltip text, placeholder text),
+# but there's no single canonical Material-role-to-Qt-role mapping the way
+# InioX/matugen-themes provides for GTK. If some specific element looks off,
+# that mapping is the first place to adjust.
+# No post_hook: qt5ct apps generally need a restart to pick up a changed
+# colour scheme, same real limitation as GTK4 above.
+
+[templates.qt6ct]
+input_path = '~/.config/matugen/templates/qt-colors.template'
+output_path = '~/.config/qt6ct/colors/matugen.conf'
+# Same template, same file format - qt6ct reads the identical colour-scheme
+# syntax qt5ct does.
+
+[templates.btop]
+input_path = '~/.config/matugen/templates/btop-colors.template'
+output_path = '~/.config/btop/themes/matugen.theme'
+# A theme FILE existing isn't enough on its own - btop.conf also needs
+# color_theme = "matugen" set. Rather than shipping a full btop.conf (which
+# install.sh would then sync/overwrite, risking clobbering whatever OTHER
+# settings you already have there - proc sorting, update interval, etc,
+# exactly the kind of mistake Round 17 fixed for matugen's own output files),
+# this surgically touches only that one line: replaces it if btop.conf
+# already has a color_theme key, appends it if the file exists without one,
+# creates the file if it doesn't exist at all. Every other line in your
+# btop.conf is left completely alone. Tested against all three cases before
+# shipping this. Idempotent - safe to run on every wallpaper change.
+post_hook = '''mkdir -p ~/.config/btop; touch ~/.config/btop/btop.conf; if grep -q "^color_theme" ~/.config/btop/btop.conf; then sed -i "s/^color_theme.*/color_theme = \"matugen\"/" ~/.config/btop/btop.conf; else echo "color_theme = \"matugen\"" >> ~/.config/btop/btop.conf; fi'''
+
+[templates.waybar]
+input_path = '~/.config/matugen/templates/waybar-colors.template'
+output_path = '~/.config/waybar/waybar-colors.css'
+# [FIX] This used to send SIGUSR2 on every wallpaper change. I called it
+# "harmless" - it wasn't. SIGUSR2's default action is a full bar RESET, not
+# a style-only refresh, and hyprland/submap gets its displayed text from live
+# Hyprland IPC events. A full reset tears that module down and rebuilds it,
+# and the rebuilt instance has no way to know "we're still inside the
+# wallpaper submap right now" - it missed the event that said so, and won't
+# hear about it again until the next actual submap change. That's exactly
+# why the submap icon was vanishing the instant a wallpaper applied, even
+# though you hadn't pressed Escape. reload_style_on_change (config.jsonc)
+# already handles colour updates on its own, gently, without touching module
+# state - no signal needed here at all.

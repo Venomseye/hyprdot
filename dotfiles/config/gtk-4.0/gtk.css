@@ -1,0 +1,12 @@
+/* This line pulls in matugen's generated colours - must stay first so the
+   named colours below are defined before anything tries to use them.
+   GTK4/libadwaita apps read this file ONCE at process start and have no
+   live-reload signal - already-running GTK4 apps need to be closed and
+   reopened to pick up a new palette. This is a real limitation of GTK4
+   itself, not something a post_hook can work around; every source I found
+   researching this (Tokyonight-GTK-Theme, Everforest-GTK-Theme, the
+   aphotic-hypr PR that specifically tackled this exact problem) says the
+   same thing. */
+@import 'colors.css';
+
+/* Add any of your own GTK4 CSS tweaks below this line. */

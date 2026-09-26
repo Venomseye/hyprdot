@@ -1,0 +1,205 @@
+{
+    "layer": "top",
+    "position": "top",
+
+    // Reloads the CSS whenever style.css or anything it imports changes.
+    // That covers waybar-colors.css, so matugen colour changes now land
+    // without any external signal. auto-reload.sh only has to care about
+    // this file and the media scripts.
+    "reload_style_on_change": true,
+
+    "modules-left": ["hyprland/workspaces", "group/media"],
+    "modules-center": ["clock"],
+    "modules-right": [
+        "hyprland/submap",
+        "idle_inhibitor",
+        "group/volume",
+        "battery",
+        "bluetooth",
+        "network",
+        "cpu",
+        "memory",
+        "tray"
+    ],
+
+    // [NEW] Manual "don't lock/sleep right now" toggle - useful for video
+    // calls, presentations, or any app that doesn't send its own idle-inhibit
+    // signal. hypridle listens for exactly this via the standard Wayland
+    // idle-inhibit protocol, no extra wiring needed on hypridle's side.
+    "idle_inhibitor": {
+        "format": "{icon}",
+        "format-icons": {
+            "activated": "",
+            "deactivated": ""
+        },
+        "tooltip-format-activated": "Idle inhibitor active - screen won't lock or sleep",
+        "tooltip-format-deactivated": "Idle inhibitor off - normal lock/sleep timers apply"
+    },
+
+    // [NEW] System tray. blueman-applet has been in autostart (hyprland.lua)
+    // since the very first version of this config, but there was never
+    // anywhere for its icon to actually render - this is that place. Also
+    // picks up anything else that puts an icon in the tray (some VPN
+    // clients, sync tools, etc).
+    "tray": {
+        "icon-size": 18,
+        "spacing": 8
+    },
+
+    "hyprland/workspaces": {
+        "on-scroll-up": "hyprctl dispatch workspace e+1",
+        "on-scroll-down": "hyprctl dispatch workspace e-1"
+    },
+
+    "battery": {
+        "interval": 60,
+        "format": "{capacity}%",
+        "format-charging": "{capacity}% ⚡",
+        "tooltip-format": "{timeTo}\n{power:0.1f}W",
+        "states": {
+            "warning": 30,
+            "critical": 15
+        }
+    },
+
+    "bluetooth": {
+        "format": "",
+        "format-disabled": "", // an empty format hides the module
+        "format-connected": " {num_connections}",
+        "tooltip-format": "{controller_alias}\t{controller_address}",
+        "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{device_enumerate}",
+        "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
+        "on-click": "blueman-manager"
+    },
+
+    "cpu": {
+        "interval": 10,
+        "format": " {usage}%",
+        "max-length": 10,
+        // Dropped the leading "exec " - waybar already runs these through a
+        // shell, so it was a no-op verb sitting in front of every command.
+        "on-click": "kitty --title=btop -e btop"
+    },
+
+    "memory": {
+        "interval": 30,
+        "format": " {percentage}%",
+        "tooltip-format": "{used:0.1f}G/{total:0.1f}G used",
+        "on-click": "kitty --title=htop -e htop"
+    },
+
+    "network": {
+        "format": "",
+        "format-wifi": "",
+        "format-ethernet": "",
+        "format-disconnected": "󰤭",
+        "tooltip-format": "{ifname} via {gwaddr} 󰊗",
+        "tooltip-format-wifi": "{essid} ({signalStrength}%) ",
+        "tooltip-format-ethernet": "{ifname} ",
+        "tooltip-format-disconnected": "󰖪",
+        "max-length": 50,
+        "on-click": "kitty --title=nmtui -e nmtui"
+    },
+
+    "clock": {
+        "format": "󰥔 {:%a, %d %b %I:%M %p}",
+        "format-alt": "󰥔 {:%Y-%m-%d %H:%M:%S}",
+        "tooltip-format": "<tt><small>{calendar}</small></tt>",
+        "calendar": {
+            "mode": "month",
+            "on-scroll": 1,
+            "format": {
+                // NOTE: waybar's calendar format takes a literal colour here,
+                // so this one can't come from matugen. Keep it in sync with
+                // @highlight in waybar-colors.css by hand, or drop the span.
+                "today": "<span color='#75f1fa'><b>{}</b></span>"
+            }
+        },
+        "actions": {
+            "on-click-right": "mode",
+            "on-scroll-up": "shift_up",
+            "on-scroll-down": "shift_down"
+        }
+        // [REVERTED] Had "on-click": "gsimplecal" here (a standalone calendar
+        // popup), before that "on-click": "firefox --app=..." (a browser
+        // window). Both removed at your request - clicking the clock now
+        // does nothing. The hover tooltip above (waybar's own built-in
+        // {calendar}) is untouched and still shows on mouseover; only the
+        // click behaviour changed.
+    },
+
+    "pulseaudio": {
+        // [REVERTED] Mic status used to be embedded here via
+        // {format_source} with hardcoded Pango <span color=...> markup.
+        // Moved to its own module below (custom/mic) instead: Pango spans
+        // need a literal colour value and can't reference a GTK CSS
+        // variable like @urgent, so the mic's "muted" colour was frozen at
+        // whatever hex was hardcoded when this was written, while the
+        // speaker's own @urgent-driven colour kept tracking matugen live.
+        // After any wallpaper change (including whatever wpaperd sets on
+        // boot), the two reds could visibly drift apart - one dynamic, one
+        // stuck. A separate module has its own real CSS node, so a real
+        // CSS rule using the real @urgent variable can style it - see
+        // #custom-mic.muted in style.css. No hardcoded colour, no drift.
+        "format": "{volume}% {icon}",
+        "format-muted": "",
+        "format-icons": {
+            "default": ["\uf027", "\uf028"]
+        },
+        "scroll-step": 1,
+        "ignored-sinks": ["Easy Effects Sink"],
+        "on-click": "pavucontrol",
+        "on-click-right": "swayosd-client --output-volume mute-toggle"
+    },
+
+    "custom/mic": {
+        "exec": "~/.config/waybar/custom_modules/mic-status.sh",
+        "return-type": "json",
+        "interval": 2,
+        "on-click": "swayosd-client --input-volume mute-toggle",
+        "tooltip": true
+    },
+
+    "pulseaudio/slider": {
+        "min": 0,
+        "max": 100,
+        "orientation": "horizontal"
+    },
+
+    "group/volume": {
+        "orientation": "horizontal",
+        "modules": ["pulseaudio", "pulseaudio/slider", "custom/mic"]
+    },
+
+    // media-time was missing from this list, which is why the elapsed/total
+    // readout never appeared despite the script and the CSS both existing.
+    "group/media": {
+        "orientation": "horizontal",
+        "modules": [
+            "custom/media-animation",
+            "custom/media-now-playing",
+            "custom/media-time"
+        ]
+    },
+
+    "custom/media-now-playing": {
+        "exec": "~/.config/waybar/custom_modules/media/media-now-playing.sh",
+        "return-type": "json",
+        "escape": true, // keeps & and < in track titles from breaking pango
+        "tooltip": true,
+        "on-click": "playerctl -i playerctld play-pause",
+        "on-click-middle": "playerctl -i playerctld previous",
+        "on-click-right": "playerctl -i playerctld next"
+    },
+
+    "custom/media-animation": {
+        "exec": "~/.config/waybar/custom_modules/media/media-animation.sh",
+        "tooltip": false
+    },
+
+    "custom/media-time": {
+        "exec": "~/.config/waybar/custom_modules/media/media-time.sh",
+        "interval": 1,
+        "tooltip": false
+    }
+}

@@ -1,0 +1,31 @@
+# wpaperd - see https://github.com/danyspin97/wpaperd
+#
+# [default] is the base for every display. Add a [eDP-1] / [DP-1] section
+# below if you ever want per-monitor overrides.
+
+[default]
+path = "~/Pictures/Wallpapers"
+
+# Runs on every wallpaper change, called as: <script> <display> <wallpaper>
+exec = "~/.config/wpaperd/matugen-hook.sh"
+
+# --- optional, uncomment to taste -----------------------------------------
+
+# Rotate automatically. Without this, wallpapers only change when you hit
+# the SUPER+SHIFT+W submap (l = next, h = previous).
+# duration = "30m"
+
+# ascending | descending | random  (default: random)
+# sorting = "random"
+
+# How to handle a wallpaper whose aspect ratio doesn't match the display.
+# fit shows the whole image with bars; other values include stretch, center,
+# tile. Run `wpaperd --help` / see the README for the exact list your build
+# supports before enabling this.
+# mode = "fit"
+
+# Recurse into subdirectories of `path`. Default is already true.
+# recursive = true
+
+# Seconds the crossfade takes.
+# transition-time = 600
