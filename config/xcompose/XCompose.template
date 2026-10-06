@@ -1,0 +1,50 @@
+# XCompose template. bin/dot-restart-xcompose renders it to ~/.XCompose.
+#
+# @NAME@-style placeholders come from ~/.config/xcompose/vars. A line whose
+# placeholder has no value is dropped.
+#
+# You need a Compose key: hypr/input.lua sets kb_options = "compose:ralt", so
+# Compose = Right Alt. Type it, release, then the sequence.
+#
+# Sequences that collide with the locale defaults below will shadow them. If
+# one misbehaves, pick a different letter.
+
+# Keep every default sequence for the current locale (accents, etc.).
+include "%L"
+
+# ---- text expansion: Compose, Space, letter --------------------------------
+<Multi_key> <space> <n> : "@NAME@"
+<Multi_key> <space> <e> : "@EMAIL@"
+<Multi_key> <m> <a> <i> <l> : "@EMAIL@"   # "mail", spelled out
+<Multi_key> <space> <p> : "@PHONE@"
+<Multi_key> <space> <a> : "@ADDRESS@"
+<Multi_key> <space> <g> : "@GITHUB@"
+<Multi_key> <space> <w> : "@WEBSITE@"
+
+# ---- emoji: Compose, m, letter ----------------------------------------------
+<Multi_key> <m> <s> : "😊" # smile
+<Multi_key> <m> <l> : "😂" # laugh
+<Multi_key> <m> <w> : "😉" # wink
+<Multi_key> <m> <h> : "❤️" # heart
+<Multi_key> <m> <t> : "👍" # thumbs up
+<Multi_key> <m> <f> : "🔥" # fire
+<Multi_key> <m> <p> : "🎉" # party
+<Multi_key> <m> <k> : "🤔" # thinking
+<Multi_key> <m> <r> : "🚀" # rocket
+<Multi_key> <m> <e> : "👀" # eyes
+<Multi_key> <m> <c> : "✅" # check
+<Multi_key> <m> <x> : "❌" # cross
+<Multi_key> <m> <y> : "🙏" # pray
+<Multi_key> <m> <0> : "💯" # hundred
+<Multi_key> <m> <g> : "¯\\_(ツ)_/¯" # shrug
+
+# ---- symbols: Compose, Compose, letter --------------------------------------
+<Multi_key> <Multi_key> <r> : "→" # right arrow
+<Multi_key> <Multi_key> <l> : "←" # left arrow
+<Multi_key> <Multi_key> <u> : "↑" # up arrow
+<Multi_key> <Multi_key> <d> : "↓" # down arrow
+<Multi_key> <Multi_key> <c> : "✓" # check mark
+<Multi_key> <Multi_key> <x> : "✗" # ballot x
+<Multi_key> <Multi_key> <e> : "…" # ellipsis
+<Multi_key> <Multi_key> <m> : "—" # em dash
+<Multi_key> <Multi_key> <t> : "×" # times

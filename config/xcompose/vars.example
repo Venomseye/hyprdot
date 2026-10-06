@@ -1,0 +1,34 @@
+# Copy to ~/.config/xcompose/vars, fill in what you want, then run
+#     dot-restart-xcompose
+# KEY=value, one per line. Quotes around the value are optional. Leave a key
+# empty (or delete it) and every template line that uses it is dropped.
+
+NAME=Your Name
+EMAIL=you@example.com
+PHONE=
+ADDRESS=
+GITHUB=
+WEBSITE=
+
+# ---------------------------------------------------------------------------
+# How a snippet works
+#
+# A snippet is a sequence of keys mapped to text. The sequences live in
+# XCompose.template (shared) and optionally ~/.config/xcompose/extra.compose
+# (yours alone). Both may use @KEY@ for the values above. With the defaults:
+#
+#     <Multi_key> <m> <a> <i> <l> : "@EMAIL@"
+#
+# means: press and release the Compose key (Right Alt), then type m, a, i, l,
+# and "you@example.com" is inserted. To add your own, create extra.compose:
+#
+#     <Multi_key> <s> <i> <g> : "Best, @NAME@"       # a sign-off
+#     <Multi_key> <m> <b> <b> : "🍻"                 # an emoji
+#     <Multi_key> <g> <h> <u> <b> : "https://github.com/@GITHUB@"
+#
+# Keep snippets to a single line - newlines in compose output are not reliable
+# across apps.
+#
+# then run dot-restart-xcompose. Pick sequences that don't start like one of
+# your locale's defaults, or they will shadow it.
+# ---------------------------------------------------------------------------

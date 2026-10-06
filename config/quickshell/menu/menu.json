@@ -1,0 +1,173 @@
+[
+  {
+    "title": "Style",
+    "glyph": "\uf1fc",
+    "subtitle": "Wallpaper and bar",
+    "children": [
+      {
+        "title": "Next wallpaper",
+        "glyph": "\uf061",
+        "action": "dot-wallpaper next",
+        "notify": true
+      },
+      {
+        "title": "Previous wallpaper",
+        "glyph": "\uf060",
+        "action": "dot-wallpaper prev",
+        "notify": true
+      },
+      {
+        "title": "Pause/resume rotation",
+        "glyph": "\uf04c",
+        "action": "wpaperctl toggle-pause-wallpaper",
+        "notify": true
+      },
+      {
+        "title": "Toggle bar transparency",
+        "glyph": "\uf12e",
+        "action": "qs ipc call shell toggle transparency"
+      }
+    ]
+  },
+  {
+    "title": "Capture",
+    "glyph": "\uf030",
+    "subtitle": "Screenshots",
+    "children": [
+      {
+        "title": "Screenshot: full screen",
+        "glyph": "\uf108",
+        "action": "mkdir -p ~/Pictures/Screenshots && f=~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png && grim - | tee \"$f\" | wl-copy && notify-send 'Screenshot saved' \"$(basename \"$f\")\""
+      },
+      {
+        "title": "Screenshot: region + annotate",
+        "glyph": "\uf125",
+        "action": "mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" - | satty --filename - --output-filename ~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+      }
+    ]
+  },
+  {
+    "title": "Toggle",
+    "glyph": "\uf205",
+    "subtitle": "Switches",
+    "children": [
+      {
+        "title": "Do not disturb",
+        "glyph": "\uf1f6",
+        "action": "qs ipc call shell toggle dnd"
+      },
+      {
+        "title": "Night light",
+        "glyph": "\uf186",
+        "action": "qs ipc call shell toggle nightlight"
+      },
+      {
+        "title": "Notification history",
+        "glyph": "\uf0f3",
+        "action": "qs ipc call shell toggle history"
+      },
+      {
+        "title": "Bar transparency",
+        "glyph": "\uf12e",
+        "action": "qs ipc call shell toggle transparency"
+      }
+    ]
+  },
+  {
+    "title": "Setup",
+    "glyph": "\uf013",
+    "subtitle": "Reload and maintenance",
+    "children": [
+      {
+        "title": "Install system updates",
+        "glyph": "\uf019",
+        "action": "dot-updates --run"
+      },
+      {
+        "title": "Check for updates now",
+        "glyph": "\uf021",
+        "action": "qs ipc call shell refresh updates",
+        "notify": true
+      },
+      {
+        "title": "Reload Hyprland",
+        "glyph": "\uf021",
+        "action": "dot-reload hypr",
+        "notify": true
+      },
+      {
+        "title": "Restart shell",
+        "glyph": "\uf021",
+        "action": "dot-reload shell",
+        "notify": true
+      },
+      {
+        "title": "Reload everything",
+        "glyph": "\uf021",
+        "action": "dot-reload",
+        "notify": true
+      },
+      {
+        "title": "Regenerate XCompose",
+        "glyph": "\uf11c",
+        "action": "dot-restart-xcompose",
+        "notify": true
+      },
+      {
+        "title": "Check keyboard / Compose key",
+        "glyph": "\uf11c",
+        "action": "kitty --title=dot-update -e bash -c 'dot-restart-xcompose --check; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Fix wallpaper (create config, add wallpapers)",
+        "glyph": "\uf03e",
+        "action": "kitty --title=dot-update -e bash -c 'dot-wallpaper init; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Diagnose problems (dot-doctor)",
+        "glyph": "\uf0f1",
+        "action": "kitty --title=dot-update -e bash -c 'dot-doctor; echo; read -rp \"Press Enter to close \" _'"
+      }
+    ]
+  },
+  {
+    "title": "System",
+    "glyph": "\uf011",
+    "subtitle": "Lock, sleep, power",
+    "children": [
+      {
+        "title": "Lock",
+        "glyph": "\uf023",
+        "action": "dot-power lock",
+        "notify": true
+      },
+      {
+        "title": "Suspend",
+        "glyph": "\uf186",
+        "action": "dot-power suspend",
+        "notify": true
+      },
+      {
+        "title": "Log out",
+        "glyph": "\uf08b",
+        "action": "dot-power logout",
+        "confirm": true,
+        "notify": true
+      },
+      {
+        "title": "Reboot",
+        "glyph": "\uf021",
+        "action": "dot-power reboot",
+        "confirm": true,
+        "notify": true
+      },
+      {
+        "title": "Shut down",
+        "glyph": "\uf011",
+        "action": "dot-power shutdown",
+        "confirm": true,
+        "notify": true
+      }
+    ]
+  }
+]
