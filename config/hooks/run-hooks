@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# Generic hook runner.
+#
+#   run-hooks <event> [args...]
+#
+# <event> is a hook directory name, with or without the ".d": `theme-set`,
+# `theme-set.d`. It is looked up in this order:
+#   <this dir>/.d/<event>.d/
+#   <this dir>/<event>.d/
+# Every executable file in it runs in parallel (each in its own subshell, with
+# a timeout), the args are forwarded, and the script waits for all of them so
+# the log gets a complete record. Callers that must not block should background
+# this script themselves (wpaperd/matugen-hook.sh does).
+#
+# Files starting with "." are skipped (so .gitkeep is harmless). Files that
+# aren't executable are logged and skipped. Log: ~/.cache/hooks.log
+
+set -uo pipefail
+
+event="${1:-}"
+if [ -z "$event" ]; then
+    echo "usage: run-hooks <event> [args...]   e.g. run-hooks theme-set.d" >&2
+    exit 2
+fi
+shift
+event="${event%.d}"
+
+# Event names become directory names - refuse anything path-like.
+case "$event" in
+    ''|*[!A-Za-z0-9_-]*)
+        echo "run-hooks: invalid event name: $event" >&2
+        exit 2
+        ;;
+esac
+
+hooks_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+LOG="$cache_dir/hooks.log"
+HOOK_TIMEOUT="${HOOK_TIMEOUT:-15}"
+
+dir=""
+for candidate in "$hooks_root/.d/$event.d" "$hooks_root/$event.d"; do
+    if [ -d "$candidate" ]; then dir="$candidate"; break; fi
+done
+[ -n "$dir" ] || exit 0
+
+mkdir -p "$cache_dir"
+log() { printf '%s  [%s] %s\n' "$(date -Is)" "$event" "$*" >>"$LOG"; }
+
+log "start (args: $*)"
+
+for hook in "$dir"/*; do
+    [ -f "$hook" ] || continue
+    name="$(basename "$hook")"
+
+    if [ ! -x "$hook" ]; then
+        log "skip $name (not executable - chmod +x it)"
+        continue
+    fi
+
+    (
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$HOOK_TIMEOUT" "$hook" "$@"
+        else
+            "$hook" "$@"
+        fi
+        rc=$?
+        if [ "$rc" -eq 124 ]; then
+            log "$name timed out after ${HOOK_TIMEOUT}s"
+        else
+            log "$name exit=$rc"
+        fi
+    ) >>"$LOG" 2>&1 &
+done
+
+wait
+log "done"
+
+# Keep the log from growing without bound.
+if [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -c 131072 "$LOG" >"$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG"
+fi
