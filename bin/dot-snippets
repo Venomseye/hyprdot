@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#
+# Text and emoji snippets for the Quickshell menu - a clipboard-based alternative
+# to the Compose key that needs no keyboard setup and works in every app.
+#
+#   dot-snippets --menu         print the menu entries (JSON) the menu loads
+#   dot-snippets copy <text>    copy <text> to the clipboard and say so
+#   dot-snippets -h             this message
+#
+# Text snippets come from ~/.config/xcompose/vars (NAME, EMAIL, PHONE, ADDRESS,
+# GITHUB, WEBSITE - the same file dot-restart-xcompose uses; empty ones are skipped).
+# Pick one in the menu (Super+Space -> Snippets), then paste with Ctrl+V.
+# Add more by creating ~/.config/xcompose/snippets, one per line:  Label|text to copy
+
+set -uo pipefail
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+VARS="$config_dir/xcompose/vars"
+EXTRA="$config_dir/xcompose/snippets"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# JSON string escaping (no jq/python needed).
+jesc() {
+    local s="$1"
+    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+# Shell-quote for the single-quoted action string.
+squote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+node() {   # node <title> <glyph> <text>
+    local action
+    action="dot-snippets copy $(squote "$3")"
+    printf '{"title":"%s","glyph":"%s","subtitle":"%s","action":"%s","notify":false}' \
+        "$(jesc "$1")" "$2" "$(jesc "${3:0:40}")" "$(jesc "$action")"
+}
+
+menu_json() {
+    local first=true out="" key val label
+    declare -A V=()
+    if [ -f "$VARS" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in ''|\#*) continue ;; esac
+            [[ "$line" == *=* ]] || continue
+            key="${line%%=*}"; val="${line#*=}"
+            [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+            if [[ ${#val} -ge 2 && ( "$val" == \"*\" || "$val" == \'*\' ) ]]; then val="${val:1:${#val}-2}"; fi
+            V["$key"]="$val"
+        done <"$VARS"
+    fi
+
+    text_items=()
+    for key in NAME EMAIL PHONE ADDRESS GITHUB WEBSITE; do
+        [ -n "${V[$key]:-}" ] || continue
+        label="${key,,}"; label="${label^}"
+        text_items+=("$(node "$label" $'\uf0e0' "${V[$key]}")")
+    done
+    if [ -f "$EXTRA" ]; then
+        while IFS='|' read -r label val || [ -n "${label:-}" ]; do
+            [ -n "${label:-}" ] && [ -n "${val:-}" ] || continue
+            case "$label" in \#*) continue ;; esac
+            text_items+=("$(node "$label" $'\uf0c5' "$val")")
+        done <"$EXTRA"
+    fi
+
+    emoji=(
+        "Smile|😊" "Laugh|😂" "Wink|😉" "Heart|❤️" "Thumbs up|👍" "Fire|🔥" "Party|🎉"
+        "Thinking|🤔" "Rocket|🚀" "Eyes|👀" "Check|✅" "Cross|❌" "Pray|🙏" "Hundred|💯"
+        "Shrug|¯\\_(ツ)_/¯" "Right arrow|→" "Left arrow|←" "Check mark|✓" "Ellipsis|…" "Em dash|—"
+    )
+    emoji_items=()
+    for pair in "${emoji[@]}"; do
+        emoji_items+=("$(node "${pair%%|*}" $'\uf118' "${pair#*|}")")
+    done
+
+    join() { local IFS=,; printf '%s' "$*"; }
+    out="["
+    if [ "${#text_items[@]}" -gt 0 ]; then
+        out+="{\"title\":\"Snippets\",\"glyph\":\"\\uf0ea\",\"subtitle\":\"Copy to clipboard, then paste\",\"children\":[$(join "${text_items[@]}")]},"
+    fi
+    out+="{\"title\":\"Emoji\",\"glyph\":\"\\uf118\",\"subtitle\":\"Copy to clipboard, then paste\",\"children\":[$(join "${emoji_items[@]}")]}"
+    out+="]"
+    printf '%s\n' "$out"
+}
+
+case "${1:-}" in
+    --menu) menu_json ;;
+    copy)
+        shift
+        [ $# -gt 0 ] || { echo "dot-snippets: nothing to copy" >&2; exit 2; }
+        if ! have wl-copy; then
+            have notify-send && notify-send -u critical -a snippets "Snippets" "wl-copy not found (pacman -S wl-clipboard)"
+            exit 1
+        fi
+        printf '%s' "$*" | wl-copy
+        have notify-send && notify-send -a snippets "Copied" "Paste with Ctrl+V: ${*:0:60}"
+        ;;
+    -h|--help|"") sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *) echo "dot-snippets: unknown option: $1" >&2; exit 2 ;;
+esac

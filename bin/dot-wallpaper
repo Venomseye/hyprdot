@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+#
+# Wallpaper helper for wpaperd.
+#
+#   dot-wallpaper next | prev       change wallpaper (says so when there is nothing to change to)
+#   dot-wallpaper doctor            explain why the wallpaper is black or won't change
+#   dot-wallpaper init [--force] [--no-restart]
+#                                   create ~/.config/wpaperd/config.toml if it's missing, put
+#                                   the bundled wallpapers in ~/Pictures/Wallpapers if that
+#                                   folder has fewer than two, and restart wpaperd
+#   dot-wallpaper -h                this message
+#
+# How it fits together: wpaperd draws the wallpaper and rotates through the images in the
+# `path` of its config. Each time it changes one it runs the `exec` script
+# (~/.config/wpaperd/matugen-hook.sh), and that regenerates every colour in the desktop.
+# So: no config, an empty folder or a single image = nothing to change to = colours never move.
+#
+# Environment: DOT_WALLPAPER_DIR overrides the folder used by `init`.
+
+set -uo pipefail
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+CFG="$config_dir/wpaperd/config.toml"
+HOOK="$config_dir/wpaperd/matugen-hook.sh"
+WDIR="${DOT_WALLPAPER_DIR:-${XDG_PICTURES_DIR:-$HOME/Pictures}/Wallpapers}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'warn: %s\n' "$*" >&2; }
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# The repo's bundled wallpapers, found through the ~/.local/bin symlink.
+bundle_dir() {
+    local self root
+    self="$(readlink -f "${BASH_SOURCE[0]}")"
+    root="$(cd "$(dirname "$self")/.." && pwd)"
+    [ -d "$root/wallpapers" ] && printf '%s\n' "$root/wallpapers"
+}
+
+# count_images <dir-or-file>
+count_images() {
+    local p="$1"
+    if [ -d "$p" ]; then
+        find -L "$p" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.bmp' \) 2>/dev/null | grep -c .
+    elif [ -f "$p" ]; then
+        echo 1
+    else
+        echo 0
+    fi
+}
+
+# Every `path = ...` in the config, with ~ and $HOME expanded.
+config_paths() {
+    [ -s "$CFG" ] || return 0
+    grep -E '^[[:space:]]*path[[:space:]]*=' "$CFG" \
+        | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*(#.*)?$//; s/^"//; s/"$//' \
+        | while IFS= read -r p; do
+            p="${p/#\~/$HOME}"; p="${p//\$HOME/$HOME}"
+            printf '%s\n' "$p"
+        done
+}
+
+total_images() {
+    local p n=0 c
+    while IFS= read -r p; do
+        c="$(count_images "$p")"; n=$((n + c))
+    done < <(config_paths | sort -u)
+    echo "$n"
+}
+
+# ---------------------------------------------------------------- next / prev
+change() {   # change next-wallpaper|previous-wallpaper
+    have wpaperctl || die "wpaperctl not found (it ships with wpaperd)"
+    pgrep -x wpaperd >/dev/null 2>&1 || die "wpaperd is not running. Start it: setsid -f wpaperd -d   (or run: dot-wallpaper doctor)"
+    local n; n="$(total_images)"
+    if [ "$n" -lt 2 ]; then
+        warn "wpaperd only has $n image(s) to show, so there is nothing to change to. Run: dot-wallpaper doctor"
+    fi
+    wpaperctl "$1"
+}
+
+# ---------------------------------------------------------------- doctor
+doctor() {
+    local problems=0 p n total=0 exec_line
+    note() { say "  - $*"; problems=$((problems + 1)); }
+
+    say "== wpaperd =="
+    if have wpaperd; then say "  installed: $(command -v wpaperd)"; else note "wpaperd is not installed"; fi
+    if pgrep -x wpaperd >/dev/null 2>&1; then say "  running: pid $(pgrep -x wpaperd | head -1)"; else note "wpaperd is not running (setsid -f wpaperd -d)"; fi
+    have wpaperctl || note "wpaperctl not found - the next/previous keys and menu entries can't work"
+
+    say; say "== config: $CFG =="
+    if [ ! -e "$CFG" ] && [ ! -L "$CFG" ]; then
+        note "no config file, so wpaperd has nothing to draw. Fix: dot-wallpaper init"
+    elif [ ! -s "$CFG" ]; then
+        note "config file is empty/dangling. Fix: dot-wallpaper init --force"
+    else
+        sed 's/^/  | /' "$CFG" | head -n 30
+        say
+        while IFS= read -r p; do
+            n="$(count_images "$p")"; total=$((total + n))
+            if [ -d "$p" ]; then say "  path $p: folder, $n image(s)"
+            elif [ -f "$p" ]; then say "  path $p: a single file"
+            else note "path does not exist: $p"; fi
+            [ -d "$p" ] && [ "$n" -eq 0 ] && note "folder $p has no images wpaperd can read (jpg, png, webp...)"
+        done < <(config_paths | sort -u)
+        [ -z "$(config_paths)" ] && note "no 'path =' line in the config"
+        [ "$total" -eq 1 ] && note "only ONE image is configured, so 'next wallpaper' has nothing to change to. Add more to the folder (or: dot-wallpaper init)"
+        exec_line="$(grep -E '^[[:space:]]*exec[[:space:]]*=' "$CFG" | head -1)"
+        if [ -z "$exec_line" ]; then
+            note "no 'exec =' line: wpaperd never runs matugen-hook.sh, so colours never follow the wallpaper"
+        else
+            p="$(printf '%s' "$exec_line" | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/; s#^~#'"$HOME"'#')"
+            [ -x "$p" ] || note "exec script is missing or not executable: $p"
+        fi
+    fi
+
+    say; say "== colours =="
+    if [ -L "$cache_dir/current-wallpaper" ]; then
+        say "  current wallpaper: $(readlink "$cache_dir/current-wallpaper")"
+    else
+        say "  no ~/.cache/current-wallpaper yet - the hook has never run"
+    fi
+    if [ -f "$cache_dir/matugen-hook.log" ]; then
+        say "  last hook log lines:"; tail -n 6 "$cache_dir/matugen-hook.log" | sed 's/^/  | /'
+    fi
+    have matugen || note "matugen is not installed"
+
+    say
+    if [ "$problems" -eq 0 ]; then
+        say "Nothing obviously wrong. If the screen is still black, wpaperd may be failing to draw (VM without 3D acceleration?): run dot-doctor."
+    else
+        say "$problems problem(s) above. Most are fixed by:  dot-wallpaper init"
+    fi
+}
+
+# ---------------------------------------------------------------- init
+init() {
+    local force=false restart=true a bundle n=0 f
+    for a in "$@"; do
+        case "$a" in
+            --force) force=true ;;
+            --no-restart) restart=false ;;
+            *) die "init: unknown option $a" ;;
+        esac
+    done
+
+    mkdir -p "$WDIR" || die "can't create $WDIR"
+    n="$(count_images "$WDIR")"
+    if [ "$n" -lt 2 ]; then
+        if bundle="$(bundle_dir)"; then
+            for f in "$bundle"/*; do
+                [ -f "$f" ] || continue
+                [ -e "$WDIR/$(basename "$f")" ] || cp -- "$f" "$WDIR/"
+            done
+            say "wallpapers: copied the bundled set into $WDIR ($(count_images "$WDIR") images)"
+        else
+            warn "$WDIR has $n image(s) and no bundled wallpapers were found - add some yourself"
+        fi
+    else
+        say "wallpapers: $n already in $WDIR"
+    fi
+
+    if [ -s "$CFG" ] && ! $force; then
+        say "config: kept your existing $CFG (use --force to replace it; the old one is backed up)"
+        # Without `exec =` wpaperd never runs the matugen hook, so colours would never
+        # follow the wallpaper. Add just that one line (file backed up first).
+        if [ -x "$HOOK" ] && ! grep -qE '^[[:space:]]*exec[[:space:]]*=' "$CFG"; then
+            if grep -q '^\[default\]' "$CFG"; then
+                cp -L -- "$CFG" "$CFG.bak-$(date +%Y%m%d_%H%M%S)"
+                sed -i "0,/^\[default\]/s##[default]\nexec = \"$HOOK\"#" "$CFG"
+                say "config: added  exec = \"$HOOK\"  under [default] (backup saved)"
+            else
+                warn "your config has no [default] section; add this line to it yourself:  exec = \"$HOOK\""
+            fi
+        fi
+    else
+        mkdir -p "$(dirname "$CFG")"
+        if [ -e "$CFG" ] || [ -L "$CFG" ]; then
+            cp -L -- "$CFG" "$CFG.bak-$(date +%Y%m%d_%H%M%S)" 2>/dev/null && say "config: old file backed up next to it"
+            rm -f -- "$CFG"
+        fi
+        {
+            echo "# Written by dot-wallpaper init. wpaperd reloads this file when it changes."
+            echo "[default]"
+            echo "path = \"$WDIR\""
+            echo "duration = \"30m\""
+            echo "sorting = \"random\""
+            if [ -x "$HOOK" ]; then echo "exec = \"$HOOK\""; else warn "$HOOK missing - colours won't follow the wallpaper until you run install.sh"; fi
+            echo
+            echo "[any]"
+            echo "path = \"$WDIR\""
+        } >"$CFG"
+        say "config: wrote $CFG"
+    fi
+
+    if $restart && have wpaperd; then
+        pkill -x wpaperd 2>/dev/null; sleep 0.4
+        if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+            setsid -f wpaperd -d >/dev/null 2>&1 </dev/null && say "wpaperd: restarted"
+        else
+            say "wpaperd: stopped; it starts with Hyprland (not inside a Wayland session here)"
+        fi
+    fi
+}
+
+case "${1:-}" in
+    next)   change next-wallpaper ;;
+    prev|previous) change previous-wallpaper ;;
+    doctor) doctor ;;
+    init)   shift; init "$@" ;;
+    -h|--help|"") sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *) die "unknown command: $1 (see --help)" ;;
+esac

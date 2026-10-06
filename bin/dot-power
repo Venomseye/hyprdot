@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# Session and power actions with fallbacks, for the menu and keybinds.
+#
+#   dot-power lock | suspend | logout | reboot | shutdown
+#
+#   lock      loginctl lock-session (hypridle then runs hyprlock). If hypridle isn't
+#             running that does nothing, so hyprlock is started directly instead.
+#   suspend   systemctl suspend (hypridle's before_sleep_cmd locks first).
+#   logout    hyprshutdown (closes windows cleanly) if installed, else
+#             loginctl terminate-user.
+#   reboot / shutdown
+#             hyprshutdown if installed, else plain systemctl.
+#
+# Problems are reported with notify-send as well as on stderr, because the menu
+# runs this with no terminal attached.
+
+set -uo pipefail
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+complain() {
+    printf 'dot-power: %s\n' "$*" >&2
+    have notify-send && notify-send -u critical -a dot-power "Power" "$*"
+    exit 1
+}
+
+# via_hyprshutdown <post-command...>: clean shutdown of the session, then the command.
+via_hyprshutdown() {
+    if have hyprshutdown; then
+        exec hyprshutdown --post-cmd "$*"
+    fi
+    exec "$@"
+}
+
+case "${1:-}" in
+    lock)
+        have loginctl || complain "loginctl not found"
+        if pgrep -x hypridle >/dev/null 2>&1; then
+            exec loginctl lock-session
+        elif have hyprlock; then
+            pgrep -x hyprlock >/dev/null 2>&1 && exit 0
+            exec hyprlock
+        else
+            complain "can't lock: neither hypridle nor hyprlock is available (pacman -S hyprlock hypridle)"
+        fi
+        ;;
+    suspend)
+        have systemctl || complain "systemctl not found"
+        exec systemctl suspend
+        ;;
+    logout)
+        have loginctl || complain "loginctl not found"
+        via_hyprshutdown loginctl terminate-user "$USER"
+        ;;
+    reboot)
+        have systemctl || complain "systemctl not found"
+        via_hyprshutdown systemctl reboot
+        ;;
+    shutdown|poweroff)
+        have systemctl || complain "systemctl not found"
+        via_hyprshutdown systemctl poweroff
+        ;;
+    -h|--help|"")
+        sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
+        ;;
+    *)
+        echo "dot-power: unknown action: $1 (see --help)" >&2
+        exit 2
+        ;;
+esac

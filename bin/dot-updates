@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+#
+# Distro-aware "are there updates?" helper for the Quickshell bar.
+#
+#   dot-updates            number of pending updates (0 = up to date); exit 1 on error
+#   dot-updates --bar      same, but never fails: prints N, "unsupported: ..." or "error: ..."
+#   dot-updates --cmd      the command that installs them
+#   dot-updates --run      run that command in a terminal window (kitty, else ghostty)
+#   dot-updates --distro   the detected family
+#   dot-updates -h         this message
+#
+# Families (read from /etc/os-release ID and ID_LIKE):
+#   arch     Arch, Manjaro, EndeavourOS, CachyOS...  checkupdates (pacman-contrib),
+#                                                    plus AUR via yay or paru if present
+#   debian   Debian, Ubuntu, Mint, Pop!_OS...        apt list --upgradable
+#   fedora   Fedora, RHEL, CentOS, Rocky, Alma       dnf check-update
+#   suse     openSUSE, SLES                          zypper list-updates
+#   void     Void Linux                              xbps-install -un
+#   alpine   Alpine                                  apk list --upgradable
+#
+# The count only checks; it never installs and never needs root. On Debian and
+# others it reflects the package lists as last
+# refreshed by your system's own timers.
+#
+# Exit codes: 0 ok, 1 error, 3 unsupported distro.
+
+set -uo pipefail
+
+OS_RELEASE="${DOT_OS_RELEASE:-/etc/os-release}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+
+family() {
+    local id="" like=""
+    if [ -r "$OS_RELEASE" ]; then
+        id="$(. "$OS_RELEASE" 2>/dev/null; printf '%s' "${ID:-}")"
+        like="$(. "$OS_RELEASE" 2>/dev/null; printf '%s' "${ID_LIKE:-}")"
+    fi
+    case " $id $like " in
+        *" arch "*)                                   echo arch ;;
+        *" debian "*|*" ubuntu "*)                    echo debian ;;
+        *" fedora "*|*" rhel "*|*" centos "*)         echo fedora ;;
+        *" suse "*|*" opensuse "*|*" sles "*)         echo suse ;;
+        *" void "*)                                   echo void ;;
+        *" alpine "*)                                 echo alpine ;;
+        *)                                            echo "unsupported:${id:-unknown}" ;;
+    esac
+}
+
+count_updates() {
+    local fam n=0 aur=0 out rc pm h
+    fam="$(family)"
+    case "$fam" in
+        arch)
+            if have checkupdates; then
+                out="$(checkupdates 2>/dev/null)"; rc=$?
+                case "$rc" in
+                    0) n="$(printf '%s\n' "$out" | grep -c .)" ;;
+                    2) n=0 ;;                               # checkupdates: "no updates"
+                    *) fail "checkupdates failed (exit $rc) - network or mirror problem?" ;;
+                esac
+            elif have pacman; then
+                n="$(pacman -Qu 2>/dev/null | grep -c .)"   # not synced, may be stale
+            else
+                fail "pacman not found"
+            fi
+            for h in yay paru; do
+                if have "$h"; then aur="$("$h" -Qua 2>/dev/null | grep -c .)"; break; fi
+            done
+            echo $((n + aur))
+            ;;
+        debian)
+            have apt || fail "apt not found"
+            apt list --upgradable 2>/dev/null | grep -c '/'
+            ;;
+        fedora)
+            if have dnf; then pm=dnf; elif have dnf5; then pm=dnf5; elif have yum; then pm=yum; else fail "dnf not found"; fi
+            out="$("$pm" -q check-update 2>/dev/null)"; rc=$?
+            case "$rc" in
+                0)   echo 0 ;;
+                100) printf '%s\n' "$out" | awk 'NF >= 3 && $1 ~ /\.[A-Za-z0-9_]+$/ { c++ } END { print c + 0 }' ;;
+                *)   fail "$pm check-update failed (exit $rc)" ;;
+            esac
+            ;;
+        suse)
+            have zypper || fail "zypper not found"
+            zypper -q --non-interactive list-updates 2>/dev/null | grep -c '^v '
+            ;;
+        void)
+            have xbps-install || fail "xbps-install not found"
+            xbps-install -un 2>/dev/null | grep -c .
+            ;;
+        alpine)
+            have apk || fail "apk not found"
+            apk list --upgradable 2>/dev/null | grep -c .
+            ;;
+        unsupported:*)
+            printf '%s\n' "no update check for distro '${fam#unsupported:}'" >&2
+            exit 3
+            ;;
+    esac
+}
+
+update_cmd() {
+    local fam
+    fam="$(family)"
+    case "$fam" in
+        arch)
+            if have yay; then echo "yay -Syu"
+            elif have paru; then echo "paru -Syu"
+            else echo "sudo pacman -Syu"; fi
+            ;;
+        debian) echo "sudo apt update && sudo apt upgrade" ;;
+        fedora) echo "sudo dnf upgrade --refresh" ;;
+        suse)   echo "sudo zypper refresh && sudo zypper update" ;;
+        void)   echo "sudo xbps-install -Su" ;;
+        alpine) echo "sudo apk update && sudo apk upgrade" ;;
+        *)      printf '%s\n' "no update command for distro '${fam#unsupported:}'" >&2; return 3 ;;
+    esac
+}
+
+run_in_terminal() {
+    local cmd script
+    cmd="$(update_cmd)" || exit $?
+    script="$cmd; printf '\\n'; read -r -p 'Finished - press Enter to close ' _"
+    if have kitty;   then exec kitty --title=dot-update -e bash -c "$script"
+    elif have ghostty; then exec ghostty --title=dot-update -e bash -c "$script"
+    else fail "neither kitty nor ghostty is installed to run '$cmd' in"
+    fi
+}
+
+case "${1:-}" in
+    ""|--count) count_updates ;;
+    --bar)
+        out="$(count_updates 2>&1)"; rc=$?
+        case "$rc" in
+            0) echo "$out" ;;
+            3) echo "unsupported: $out" ;;
+            *) echo "error: $out" ;;
+        esac
+        exit 0
+        ;;
+    --cmd)    update_cmd ;;
+    --run)    run_in_terminal ;;
+    --distro) family ;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *) echo "dot-updates: unknown option: $1 (see --help)" >&2; exit 2 ;;
+esac

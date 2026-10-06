@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+#
+# Diagnose "black screen / no bar / no wallpaper". Read-only: it changes nothing.
+#
+#   dot-doctor              print a report and save a copy to ~/dot-doctor-<time>.txt
+#   dot-doctor --no-save    print only
+#   dot-doctor -h           this message
+#
+# Run it from a terminal INSIDE the broken session (Super+Return). If a
+# keybind doesn't work either, switch to a TTY (Ctrl+Alt+F3), log in and run it
+# there - the checks that need Hyprland will say so and the rest still work.
+# The "Likely problems" list at the end is the part to read first; send the
+# whole file if it doesn't explain things.
+
+set -uo pipefail
+
+SAVE=true
+case "${1:-}" in
+    -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --no-save) SAVE=false ;;
+esac
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}"
+OUT="$HOME/dot-doctor-$(date +%Y%m%d_%H%M%S).txt"
+
+issues=()
+issue() { issues+=("$*"); }
+sec()   { printf '\n== %s ==\n' "$*"; }
+have()  { command -v "$1" >/dev/null 2>&1; }
+tailf() { # tailf <n> <file>
+    if [ -s "$2" ]; then tail -n "$1" "$2" | sed 's/\x1b\[[0-9;]*m//g; s/^/  /'; else echo "  (missing or empty: $2)"; fi
+}
+
+report() {
+    echo "dot-doctor  $(date -Is)"
+
+    # ------------------------------------------------------------------
+    sec "session"
+    echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-<unset>}  WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>}  DISPLAY=${DISPLAY:-<unset>}"
+    echo "HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE:-<unset>}"
+    echo "QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-<unset>}  QT_QUICK_BACKEND=${QT_QUICK_BACKEND:-<unset>}"
+    have Hyprland && Hyprland --version 2>/dev/null | head -1
+    virt="$(systemd-detect-virt --vm 2>/dev/null || true)"
+    echo "virtualisation: ${virt:-unknown}"
+    [ -n "${WAYLAND_DISPLAY:-}" ] || issue "WAYLAND_DISPLAY is not set - this shell isn't inside the Hyprland session"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) issue "~/.local/bin is not on PATH, so dot-reload / dot-wallpaper / dot-updates can't be found (the menu says '... is not installed'). Restart Hyprland after updating autostart.lua" ;;
+    esac
+
+    # ------------------------------------------------------------------
+    sec "graphics access (the screenshot's 'DRM_IOCTL_MODE_CREATE_DUMB ... Permission denied')"
+    ls -l /dev/dri/ 2>&1 | sed 's/^/  /'
+    echo "  groups: $(id -nG)"
+    usable=0
+    for n in /dev/dri/renderD*; do
+        [ -e "$n" ] && [ -r "$n" ] && [ -w "$n" ] && usable=1
+    done
+    if [ "$usable" -eq 0 ]; then
+        issue "no read/write access to any /dev/dri/renderD* - GL clients (Quickshell, wpaperd) cannot draw. Add yourself to the 'render' and 'video' groups (sudo usermod -aG render,video \$USER, then log out and in), or on a VM enable 3D acceleration"
+    fi
+    if have eglinfo; then
+        eglinfo -B 2>/dev/null | grep -iE 'renderer|vendor|platform' | head -6 | sed 's/^/  /'
+    else
+        echo "  (eglinfo not installed; 'pacman -S mesa-utils' would show which GL renderer is in use)"
+    fi
+    if [ "${virt:-none}" != "none" ] && [ -n "${virt:-}" ] && [ "${QT_QUICK_BACKEND:-}" != "software" ]; then
+        issue "running in a VM ($virt) but QT_QUICK_BACKEND isn't 'software' - create ~/.config/hypr/software-render and restart Hyprland"
+    fi
+
+    # ------------------------------------------------------------------
+    sec "packages"
+    for pkg in hyprland quickshell matugen wpaperd hyprlock hypridle qt6-wayland qt6-declarative upower mesa; do
+        if have pacman; then
+            v="$(pacman -Q "$pkg" 2>/dev/null)" && echo "  $v" || echo "  $pkg: NOT INSTALLED"
+        fi
+    done
+    have quickshell || issue "quickshell is not in PATH"
+    have wpaperd    || issue "wpaperd is not in PATH"
+    have matugen    || issue "matugen is not in PATH"
+    if ! ls /usr/lib/qt6/plugins/platforms/libqwayland*.so /usr/lib64/qt6/plugins/platforms/libqwayland*.so >/dev/null 2>&1; then
+        issue "Qt Wayland platform plugin not found - install qt6-wayland (Quickshell otherwise falls back to X11 and draws nothing)"
+    fi
+
+    # ------------------------------------------------------------------
+    sec "processes"
+    for p in wpaperd quickshell hypridle mako dunst waybar; do
+        pgrep -ax "$p" >/dev/null 2>&1 && pgrep -ax "$p" | sed 's/^/  /' || echo "  $p: not running"
+    done
+    pgrep -x wpaperd    >/dev/null 2>&1 || issue "wpaperd is not running - no wallpaper (black screen). See the wpaperd section"
+    pgrep -x quickshell >/dev/null 2>&1 || issue "quickshell is not running - no bar/menu/notifications. See ~/.cache/quickshell.log below"
+    for p in mako dunst; do
+        pgrep -x "$p" >/dev/null 2>&1 && issue "$p is running - it owns the notification bus name, so Quickshell can't show notifications. Stop it"
+    done
+    pgrep -x waybar >/dev/null 2>&1 && issue "waybar is still running next to the Quickshell bar"
+
+    # ------------------------------------------------------------------
+    sec "wallpaper (dot-wallpaper doctor)"
+    if have dot-wallpaper; then
+        dot-wallpaper doctor 2>&1 | sed 's/^/  /'
+    elif [ -x "$HOME/.local/bin/dot-wallpaper" ]; then
+        "$HOME/.local/bin/dot-wallpaper" doctor 2>&1 | sed 's/^/  /'
+    else
+        echo "  dot-wallpaper is not installed - run install.sh"
+    fi
+
+    sec "wpaperd"
+    ls -ld "$config/wpaperd" 2>&1 | sed 's/^/  /'
+    ls -l  "$config/wpaperd/" 2>&1 | sed 's/^/  /'
+    wcfg="$config/wpaperd/config.toml"
+    if [ ! -s "$wcfg" ]; then
+        issue "$wcfg is missing, so wpaperd has no wallpaper to draw (black screen). install.sh keeps its originals in ~/.config-backup-*/ - restore with: cp \$(ls -d ~/.config-backup-*/wpaperd/config.toml | tail -1) $wcfg"
+        ls -d "$HOME"/.config-backup-* 2>/dev/null | sed 's/^/  backup: /'
+    else
+        echo "  --- $wcfg"
+        head -n 30 "$wcfg" | sed 's/^/  /'
+        grep -E '^[[:space:]]*path[[:space:]]*=' "$wcfg" | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/' | while read -r wp; do
+            wp="${wp/#\~/$HOME}"
+            [ -e "$wp" ] || echo "  !! wallpaper path does not exist: $wp"
+        done
+        grep -qE '^[[:space:]]*exec[[:space:]]*=' "$wcfg" || echo "  note: no 'exec =' line - matugen-hook.sh is never called, so colours never update"
+    fi
+
+    # ------------------------------------------------------------------
+    sec "Hyprland"
+    if have hyprctl && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        errs="$(hyprctl configerrors 2>&1)"
+        if [ -n "$errs" ]; then echo "  config errors:"; printf '%s\n' "$errs" | sed 's/^/    /'; issue "Hyprland reports config errors (above)"; else echo "  hyprctl configerrors: none"; fi
+        echo "  --- last warnings/errors in Hyprland's log"
+        hyprctl rollinglog 2>/dev/null | grep -iE 'err|warn|fail|lua|permission' | tail -n 25 | sed 's/^/  /'
+    else
+        echo "  (not inside a Hyprland session - skipped)"
+    fi
+    for d in hypr quickshell hooks matugen wpaperd kitty ghostty gtk-3.0 gtk-4.0 xcompose; do
+        [ -d "$config/$d" ] || continue
+        while IFS= read -r l; do
+            echo "  dangling link: $l"
+            issue "dangling link $l (a file was removed from the repo - rerun install.sh)"
+        done < <(find "$config/$d" -xtype l 2>/dev/null | head -5)
+    done
+    while IFS= read -r l; do echo "  dangling link: $l"; done < <(find "$HOME/.local/bin" -maxdepth 1 -xtype l 2>/dev/null)
+
+    # ------------------------------------------------------------------
+    sec "Quickshell"
+    ls "$config/quickshell" 2>&1 | sed 's/^/  /'
+    [ -e "$config/quickshell/shell.qml" ] || issue "$config/quickshell/shell.qml is missing - Quickshell has nothing to load"
+    if grep -q BOOTSTRAP "$config/quickshell/theme/Colors.qml" 2>/dev/null; then
+        echo "  Colors.qml: still the bootstrap placeholder (matugen hasn't run yet) - harmless, the bar still works"
+    elif [ -e "$config/quickshell/theme/Colors.qml" ]; then
+        echo "  Colors.qml: generated by matugen"
+    else
+        issue "theme/Colors.qml is missing - every QML file imports it"
+    fi
+    echo "  --- $cache/quickshell.log (last 40 lines)"
+    tailf 40 "$cache/quickshell.log"
+    if have qs && pgrep -x quickshell >/dev/null 2>&1; then
+        echo "  --- qs log (last 30 lines)"
+        timeout 5 qs log 2>&1 | tail -n 30 | sed 's/^/  /'
+    fi
+    if grep -qiE 'could not find the qt platform plugin|no qt platform plugin|xcb|eglfs|DRM_IOCTL_MODE_CREATE_DUMB' "$cache/quickshell.log" 2>/dev/null; then
+        issue "quickshell.log shows a Qt platform / DRM problem - see the graphics-access and qt6-wayland checks above"
+    fi
+    if sed 's/\x1b\[[0-9;]*m//g' "$cache/quickshell.log" 2>/dev/null \
+        | grep -iE 'error|failed to load|unavailable|is not a type|not installed|cannot assign' \
+        | grep -viE 'NoActivePlayer|playerctld|File does not exist|Reloading' | grep -q .; then
+        issue "quickshell.log contains real errors - see the section above and send it"
+    fi
+    echo "  (playerctld 'NoActivePlayer' and 'File does not exist' warnings are harmless)"
+
+    # ------------------------------------------------------------------
+    sec "keyboard (Compose key / Right Alt)"
+    if have dot-restart-xcompose; then
+        dot-restart-xcompose --check 2>&1 | sed 's/^/  /'
+    elif [ -x "$HOME/.local/bin/dot-restart-xcompose" ]; then
+        "$HOME/.local/bin/dot-restart-xcompose" --check 2>&1 | sed 's/^/  /'
+    else
+        echo "  dot-restart-xcompose is not installed - run install.sh"
+    fi
+
+    sec "keybinds"
+    if have hyprctl && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        nb="$(hyprctl binds -j 2>/dev/null | grep -c '"key"')"
+        echo "  Hyprland has $nb keybinds registered"
+        [ "${nb:-0}" -gt 5 ] || issue "only ${nb:-0} keybinds are registered - bindings.lua failed to load (hyprctl configerrors above)"
+        hyprctl submap 2>/dev/null | sed 's/^/  active submap: /'
+    else
+        echo "  (not inside a Hyprland session - skipped)"
+    fi
+
+    sec "menu commands (everything the menu can run)"
+    mj="$config/quickshell/menu/menu.json"
+    if [ -r "$mj" ]; then
+        if have jq; then
+            acts="$(jq -r '.. | objects | select(.action) | .action' "$mj" 2>/dev/null)"
+        else
+            acts="$(grep -oE '"action": *"[^"]*"' "$mj" | sed -E 's/^"action": *"//; s/"$//')"
+        fi
+        while IFS= read -r c; do
+            [ -n "$c" ] || continue
+            if PATH="$HOME/.local/bin:$PATH" command -v "$c" >/dev/null 2>&1; then echo "  ok       $c"
+            else echo "  MISSING  $c"; issue "menu runs '$c' but it isn't installed / on PATH"; fi
+        done < <(printf '%s\n' "$acts" | awk '{print $1}' | sort -u)
+        for c in grim slurp satty wl-copy notify-send kitty wpaperctl hyprctl qs hyprshutdown; do
+            have "$c" || echo "  optional: $c not installed (some menu entries fall back or report it)"
+        done
+    else
+        echo "  $mj not found"
+    fi
+
+    sec "hook logs"
+    echo "  --- matugen-hook.log"; tailf 12 "$cache/matugen-hook.log"
+    echo "  --- hooks.log";        tailf 12 "$cache/hooks.log"
+
+    # ------------------------------------------------------------------
+    sec "Likely problems"
+    if [ "${#issues[@]}" -eq 0 ]; then
+        echo "  none of the automatic checks tripped - send this whole file"
+    else
+        i=1
+        for m in "${issues[@]}"; do echo "  $i. $m"; i=$((i + 1)); done
+    fi
+}
+
+if $SAVE; then
+    report 2>&1 | tee "$OUT"
+    echo; echo "saved: $OUT"
+else
+    report 2>&1
+fi

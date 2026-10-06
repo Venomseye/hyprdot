@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+#
+# Safely reload Hyprland and restart Quickshell without leaving stray processes.
+#
+#   dot-reload [hypr|shell|all] [options]
+#
+#   hypr     syntax-check the Lua config, then `hyprctl reload`
+#   shell    stop every Quickshell of yours, then start exactly one
+#   all      both, Hyprland first (default)
+#
+#   -n, --dry-run   show what would happen, change nothing
+#   -f, --force     reload Hyprland even if the Lua syntax check fails
+#   -h, --help      this message
+#
+# Why this doesn't leave zombies or duplicates:
+#   * A zombie is a child that exited while its parent never wait()ed for it.
+#     This script never stays the parent of anything long-lived: Quickshell is
+#     started with `setsid -f`, so it is re-parented to init/systemd at once.
+#   * The old instance is stopped first (graceful `qs kill`, then SIGTERM, then
+#     SIGKILL as a last resort) and we wait for it to actually be gone before
+#     starting the new one, so two shells never fight over the bar or the
+#     notification bus name.
+#   * After starting, it checks that exactly one instance is alive, and reports
+#     any defunct Quickshell it finds along with the parent that has to reap it
+#     (a zombie can only be cleared by its parent, not killed directly).
+
+set -uo pipefail
+
+DRY_RUN=false
+FORCE=false
+TARGET=all
+
+for arg in "$@"; do
+    case "$arg" in
+        hypr|shell|all) TARGET="$arg" ;;
+        -n|--dry-run) DRY_RUN=true ;;
+        -f|--force) FORCE=true ;;
+        -h|--help)
+            sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
+            exit 0
+            ;;
+        *)
+            echo "dot-reload: unknown argument: $arg (see --help)" >&2
+            exit 2
+            ;;
+    esac
+done
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+LOG="$cache_dir/quickshell.log"
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'warn: %s\n' "$*" >&2; }
+err()  { printf 'error: %s\n' "$*" >&2; }
+run()  { if $DRY_RUN; then printf '  would: %s\n' "$*"; else "$@"; fi; }
+
+# Only one dot-reload at a time (a double-tapped keybind would otherwise race).
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"${XDG_RUNTIME_DIR:-/tmp}/dot-reload.lock"
+    flock -n 9 || { err "another dot-reload is already running"; exit 1; }
+fi
+
+# ---------------------------------------------------------------- Hyprland
+
+lua_syntax_check() {
+    local dir="$config_dir/hypr" checker="" c f out failed=0
+
+    for c in luac luac5.4 luac5.1 luajit; do
+        if command -v "$c" >/dev/null 2>&1; then checker="$c"; break; fi
+    done
+    if [ -z "$checker" ]; then
+        warn "no luac/luajit found - skipping Lua syntax check (install 'lua' or 'luajit' to enable it)"
+        return 0
+    fi
+
+    for f in "$dir"/*.lua; do
+        [ -f "$f" ] || continue
+        if [ "$checker" = luajit ]; then
+            out="$(luajit -bl "$f" 2>&1 >/dev/null)" || { err "syntax error in $f"; printf '%s\n' "$out" >&2; failed=1; }
+        else
+            out="$("$checker" -p "$f" 2>&1)" || { err "syntax error in $f"; printf '%s\n' "$out" >&2; failed=1; }
+        fi
+    done
+    return "$failed"
+}
+
+reload_hypr() {
+    say "hyprland: reloading"
+
+    command -v hyprctl >/dev/null 2>&1 || { err "hyprctl not found"; return 1; }
+    [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || { err "not inside a Hyprland session (HYPRLAND_INSTANCE_SIGNATURE unset)"; return 1; }
+
+    if ! lua_syntax_check; then
+        if $FORCE; then
+            warn "syntax check failed, reloading anyway (--force)"
+        else
+            err "not reloading - fix the syntax error above, or pass --force"
+            return 1
+        fi
+    fi
+
+    run hyprctl reload || { err "hyprctl reload failed"; return 1; }
+
+    if ! $DRY_RUN; then
+        sleep 0.3
+        local errors
+        errors="$(hyprctl configerrors 2>/dev/null || true)"
+        if [ -n "$errors" ]; then
+            err "Hyprland reported config errors:"
+            printf '%s\n' "$errors" >&2
+            return 1
+        fi
+    fi
+    say "hyprland: ok"
+}
+
+# ---------------------------------------------------------------- Quickshell
+
+# Output: "pid ppid stat comm" for each of your quickshell processes (qs is an
+# alias for the same binary).
+_ps_shell() {
+    ps -u "$(id -u)" -o pid=,ppid=,stat=,comm= 2>/dev/null \
+        | awk '$4 == "quickshell" || $4 == "qs" { print }'
+}
+shell_pids()    { _ps_shell | awk '$3 !~ /^Z/ { print $1 }'; }
+shell_zombies() { _ps_shell | awk '$3 ~ /^Z/ { print }'; }
+
+# wait_gone <seconds>: 0 once no live instance remains, 1 on timeout.
+wait_gone() {
+    $DRY_RUN && return 0
+    local tries=$(( $1 * 10 )) i
+    for ((i = 0; i < tries; i++)); do
+        [ -z "$(shell_pids)" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+stop_shell() {
+    local pids
+    pids="$(shell_pids | tr '\n' ' ')"
+    if [ -z "$pids" ]; then
+        say "quickshell: not running"
+        return 0
+    fi
+    say "quickshell: stopping (pid ${pids% })"
+
+    if command -v qs >/dev/null 2>&1; then
+        run qs kill >/dev/null 2>&1 || true
+    fi
+    wait_gone 3 && return 0
+
+    warn "graceful stop didn't finish, sending SIGTERM"
+    run pkill -TERM -u "$(id -u)" -x 'quickshell|qs'
+    wait_gone 3 && return 0
+
+    warn "SIGTERM ignored, sending SIGKILL"
+    run pkill -KILL -u "$(id -u)" -x 'quickshell|qs'
+    wait_gone 2 && return 0
+
+    err "quickshell is still running (pid $(shell_pids | tr '\n' ' '))- not starting a second one"
+    return 1
+}
+
+report_zombies() {
+    local pid ppid stat comm
+    while read -r pid ppid stat comm; do
+        [ -n "${pid:-}" ] || continue
+        warn "defunct $comm (pid $pid): its parent, pid $ppid ($(ps -o comm= -p "$ppid" 2>/dev/null || echo '?')), never reaped it. Only that parent can clear it - restart it."
+    done <<<"$(shell_zombies)"
+}
+
+start_shell() {
+    local shell_bin count
+    shell_bin="$(command -v quickshell || true)"
+    [ -n "$shell_bin" ] || { err "quickshell not found in PATH"; return 1; }
+    [ -n "${WAYLAND_DISPLAY:-}" ] || { err "WAYLAND_DISPLAY not set - run this from inside your Hyprland session"; return 1; }
+
+    if $DRY_RUN; then
+        say "quickshell: would start $shell_bin detached (log: $LOG)"
+        return 0
+    fi
+
+    mkdir -p "$cache_dir"
+    if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 262144 ]; then : >"$LOG"; fi
+    printf '\n=== %s dot-reload\n' "$(date -Is)" >>"$LOG"
+
+    say "quickshell: starting"
+    # `9>&-` closes the lock fd in the child. Without it the long-lived
+    # Quickshell would inherit the flock and every later dot-reload would fail
+    # with "already running" until Quickshell exited.
+    if command -v setsid >/dev/null 2>&1; then
+        QT_QPA_PLATFORM=wayland setsid -f "$shell_bin" >>"$LOG" 2>&1 </dev/null 9>&-
+    else
+        QT_QPA_PLATFORM=wayland nohup "$shell_bin" >>"$LOG" 2>&1 </dev/null 9>&- &
+        disown
+    fi
+
+    sleep 2
+    count="$(shell_pids | grep -c . || true)"
+    if [ "$count" -eq 0 ]; then
+        err "quickshell exited right after starting. Last log lines ($LOG):"
+        tail -n 15 "$LOG" >&2
+        return 1
+    elif [ "$count" -gt 1 ]; then
+        warn "$count quickshell instances are running - expected 1"
+        return 1
+    fi
+    say "quickshell: ok (pid $(shell_pids))"
+}
+
+restart_shell() {
+    stop_shell || return 1
+    report_zombies
+    start_shell
+}
+
+# ---------------------------------------------------------------- main
+
+$DRY_RUN && say "=== DRY RUN - nothing will be changed ==="
+
+status=0
+case "$TARGET" in
+    hypr)  reload_hypr || status=1 ;;
+    shell) restart_shell || status=1 ;;
+    all)   reload_hypr || status=1
+           restart_shell || status=1 ;;
+esac
+
+exit "$status"
