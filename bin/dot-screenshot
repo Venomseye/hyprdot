@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# Screenshots with a choice of what to capture. Saved to ~/Pictures/Screenshots, copied to
+# the clipboard, and announced with a notification (the picture is its icon).
+#
+#   dot-screenshot screen     the display that has focus right now
+#   dot-screenshot all        everything: every display in one picture
+#   dot-screenshot region     drag a selection (Esc cancels)
+#   dot-screenshot window     the focused window
+#   options:  --edit   open the capture in satty to annotate (it saves from there)
+#             --delay S  wait S seconds first (the menu uses this so it is gone before capture)
+#
+# Keys: Print = display, Shift+Print = everything, Ctrl+Print = selection, Alt+Print = window,
+#       Super+Ctrl+S = selection + annotate.
+
+set -uo pipefail
+
+have() { command -v "$1" >/dev/null 2>&1; }
+note() { have notify-send && notify-send "$@"; }
+die()  { note -u critical -a screenshot "Screenshot" "$1"; echo "dot-screenshot: $1" >&2; exit 1; }
+
+mode="${1:-screen}"; shift || true
+edit=false; delay=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --edit)  edit=true ;;
+        --delay) delay="${2:-0}"; shift ;;
+        *) die "unknown option: $1" ;;
+    esac
+    shift
+done
+
+have grim || die "grim is not installed (pacman -S grim)"
+dir="${XDG_PICTURES_DIR:-$HOME/Pictures}/Screenshots"
+mkdir -p "$dir"
+file="$dir/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+
+# the focused display / window, read from hyprctl's plain-text output (no jq needed)
+focused_output() { hyprctl monitors 2>/dev/null | awk '/^Monitor /{n=$2} /focused: yes/{print n; exit}'; }
+window_geometry() {
+    hyprctl activewindow 2>/dev/null | awk '
+        $1 == "at:"   { split($2, a, ",") }
+        $1 == "size:" { split($2, s, ",") }
+        END { if (a[1] != "" && s[1] != "") printf "%d,%d %dx%d", a[1], a[2], s[1], s[2] }'
+}
+
+[ "$delay" != 0 ] && sleep "$delay"
+
+case "$mode" in
+    screen)
+        out="$(focused_output)"
+        if [ -n "$out" ]; then args=(-o "$out"); else args=(); fi        # no hyprctl: everything
+        ;;
+    all)    args=() ;;
+    region)
+        have slurp || die "slurp is not installed (pacman -S slurp)"
+        geom="$(slurp 2>/dev/null)" || exit 0                              # Esc = cancelled
+        [ -n "$geom" ] || exit 0
+        args=(-g "$geom")
+        ;;
+    window)
+        geom="$(window_geometry)"
+        [ -n "$geom" ] || die "no focused window to capture"
+        args=(-g "$geom")
+        ;;
+    *) die "unknown mode '$mode' (screen | all | region | window)" ;;
+esac
+
+if $edit; then
+    have satty || die "satty is not installed (pacman -S satty)"
+    grim "${args[@]}" - | satty --filename - --output-filename "$file"
+    exit 0
+fi
+
+grim "${args[@]}" "$file" || die "grim failed"
+have wl-copy && wl-copy <"$file"
+note -a screenshot -i "$file" "Screenshot saved" "$(basename "$file")"

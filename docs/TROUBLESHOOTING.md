@@ -71,12 +71,12 @@ and each change runs the `exec` script that regenerates every colour. So:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Changing does nothing | only one image in the configured folder | `init` copies six bundled wallpapers into `~/Pictures/Wallpapers` (or add your own) |
+| Changing does nothing | the wallpaper is pinned (picker / `set`): run `dot-wallpaper rotate`; or only one image in the folder | `init` copies six bundled wallpapers into `~/Pictures/Wallpapers` (or add your own) |
 | Colours never follow the wallpaper | no `exec =` line in the config | `init` adds it (your config is backed up first) |
 | Truly nothing drawn | no config at all, or wpaperd not running | `init` creates it; `setsid -f wpaperd -d` |
 | Black in a VM | wpaperd needs OpenGL | see "The one that matters" above |
 
-Keys: `Super+Ctrl+W` next wallpaper, or `Super+Shift+W` then `l` / `h`. The menu
+Keys: `Super+Ctrl+W` next, `Super+Ctrl+Shift+W` previous, `Super+Shift+W` picker. The menu
 has Style -> Next/Previous wallpaper, and Setup -> Fix wallpaper.
 
 ## "dot-reload is not installed" in the menu
@@ -133,3 +133,120 @@ ordinary binds now (see `docs/KEYBINDINGS.md`). If a session still feels stuck,
 * Log out / Reboot / Shut down used `hyprshutdown`, which most systems don't have;
   `dot-power` falls back to `loginctl` / `systemctl`.
 * `dot-doctor` lists every command the menu can run and which are missing.
+
+## New in this version: what needs what
+
+| Feature | Needs | If missing |
+| --- | --- | --- |
+| Brightness slider | `brightnessctl` and a backlight | hidden (VMs/desktops have none) |
+| Wi-Fi tile and list | NetworkManager (`nmcli`) | hidden |
+| Bluetooth tile and list | `bluetoothctl` | hidden |
+| Stay awake | `hypridle` | tile hidden |
+| Power profile | `power-profiles-daemon` | tile hidden |
+| Night light | `hyprsunset` | dim icon, says so |
+| Clipboard history | `cliphist`, `wl-clipboard` | menu says "cliphist is not installed" |
+| Panel blur | a layer rule at the end of `hypr/rules.lua` | panels are translucent but not blurred; check `hyprctl configerrors` |
+| Dark/Light, Style | matugen options; if matugen rejects them the hook retries plain | colours still update |
+
+Pinning a wallpaper edits the `path =` line under `[default]`/`[any]` in
+`~/.config/wpaperd/config.toml` (backup: `config.toml.dot-backup`) and restarts
+wpaperd; `dot-wallpaper rotate` puts the folder back.
+
+## Some apps stay light
+
+```bash
+dot-theme init      # writes the Qt config, sets the GTK dark preference
+dot-theme doctor    # lists what is missing
+```
+
+| App kind | Follows | Needs |
+| --- | --- | --- |
+| libadwaita / GTK4 | `gsettings color-scheme` | **`dconf`** - without it gsettings forgets the setting at once |
+| GTK3 and file dialogs | `adw-gtk3-dark` + `gtk-3.0/settings.ini` | `adw-gtk-theme` |
+| Firefox / Chromium | the portal's color-scheme | `xdg-desktop-portal-gtk` |
+| Qt | qt5ct/qt6ct with the matugen scheme | `qt5ct` / `qt6ct` |
+
+Apps that were already open keep their old look until restarted.
+
+## kitty / ghostty: black, or "close this window?" prompts
+
+The repo ships `kitty/kitty.conf` and `ghostty/config`: font, padding, translucency, the matugen
+colours, and **no confirmation when closing** (`confirm_os_window_close 0`,
+`confirm-close-surface = false`). Existing copies are backed up by `install.sh`.
+
+## "Battery low" at every boot or reload
+
+UPower reports 0% for a moment after the shell restarts. The monitor now ignores that (values
+must be known, ten seconds old and still low four seconds later) and the hook re-checks the
+kernel's own reading and stays quiet for 20 minutes after one warning.
+
+## Workspaces and monitors
+
+`dot-reload` and the bar talk to Hyprland with Lua expressions
+(`hyprctl dispatch "hl.dsp.focus({ workspace = 3 })"`), because that is what a Lua config
+expects. Each bar highlights the workspace that is active on its own monitor.
+
+## Tray icon right-click does nothing / "Cannot display PlatformMenuEntry"
+
+Quickshell's log says `Cannot display PlatformMenuEntry as quickshell was not started in
+QApplication mode.` Tray menus need a QApplication, which `shell.qml` now requests with
+`//@ pragma UseQApplication` on its first line (needs `qt6-base`, which is always present
+with Quickshell). Restart it once: `dot-reload shell`.
+
+## Media pill missing
+
+The pill only shows while a player reports a track title over MPRIS (Spotify, Firefox/Chromium
+tabs, mpv with mpv-mpris, ...). Check with `playerctl -l` and `qs ipc call shell media playpause`.
+If the shell fails to load after an update, `qs` in a terminal prints the file and line; the old
+widget is `docs/legacy/Media.classic.qml`.
+
+## nmtui (or whiptail) colours are unreadable
+
+nmtui draws with fixed ANSI colour names, and the matugen palette fills nearly every ANSI slot with
+a light pastel, so the defaults were pink on pink. `NEWT_COLORS` is now set in `hypr/autostart.lua`
+(every terminal, after a Hyprland restart) and in `kitty/kitty.conf` (new kitty windows). Try it
+right now in any terminal:
+
+```bash
+NEWT_COLORS='root=white,black window=white,black border=lightgray,black shadow=black,black title=blue,black button=blue,black actbutton=black,blue entry=black,lightgray listbox=white,black actlistbox=white,black sellistbox=blue,black actsellistbox=black,blue' nmtui
+```
+
+If a colour still looks wrong, edit the value in those two files (names: black red green brown blue
+magenta cyan lightgray gray brightred ... white; they are ANSI slots 0-15 of the matugen palette).
+
+nmtui also hard-codes a few colours that `NEWT_COLORS` cannot change (plain labels such as "Please
+select an option", error labels, disabled buttons, text boxes). They have their own variable,
+`NMT_NEWT_COLORS` (`plainLabel`, `badLabel`, `disabledButton`, `textboxWithBackground`), set in the
+same two files. Check that both variables reached your terminal with `echo "$NEWT_COLORS"; echo "$NMT_NEWT_COLORS"`;
+if they are empty, that terminal was started before the change - open a new one (kitty) or restart
+Hyprland (other terminals).
+
+## Only one file manager window opens
+
+Nautilus is single-instance, so a bare `nautilus` just re-activates the running one.
+`Super+E` now runs `nautilus --new-window`.
+
+## Log out / Reboot / Shut down need Enter twice
+
+That is deliberate: they ask "Enter again to confirm" (red, on the row) so a stray key can't
+end your session. Moving to another row cancels it; Esc cancels it. To run them on the first
+Enter, set `confirmPower: false` in `config/quickshell/theme/Style.qml` and `dot-reload shell`.
+(Older versions also cancelled the confirmation whenever the mouse moved a few pixels, which made
+clicking Log out start over forever - fixed.)
+
+## "Failed to start Samba AD Daemon" after logging out
+
+Not from these dotfiles (nothing here starts or mentions Samba). `samba.service` is the Samba
+*Active Directory domain controller*; if it is enabled and not configured as one it fails at
+boot, and the `[FAILED]` line stays on the console, so you see it as soon as you log out to the
+TTY. Check, then switch it off if you don't run a domain:
+
+```bash
+systemctl --failed
+systemctl status samba
+sudo systemctl disable --now samba     # file sharing uses smb + nmb, not this one
+```
+
+`dot-doctor` now lists failed services. Logout also ends only your current session
+(`loginctl terminate-session`) instead of `terminate-user`, which killed every session and
+service you own.

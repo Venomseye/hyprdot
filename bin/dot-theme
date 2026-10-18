@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+#
+# Makes every kind of app follow the dark/light scheme and the wallpaper colours.
+#
+#   dot-theme init      write qt5ct.conf / qt6ct.conf (so Qt apps use the matugen colours),
+#                       set the GTK/libadwaita dark preference now
+#   dot-theme doctor    why some apps stay light: lists what is missing
+#   dot-theme -h        this message
+#
+# Who follows what:
+#   libadwaita / GTK4  gsettings color-scheme (needs the dconf package, or it is forgotten at once)
+#   GTK3 (file dialogs) adw-gtk3-dark theme + gtk-3.0/settings.ini (needs adw-gtk-theme)
+#   Firefox, Chromium   the freedesktop portal (xdg-desktop-portal-gtk) -> color-scheme
+#   Qt apps             qt5ct / qt6ct with the matugen colour scheme (QT_QPA_PLATFORMTHEME)
+# wpaperd's hook (hooks/.d/theme-set.d/01-reload.sh) re-applies all of it on every wallpaper change.
+
+set -uo pipefail
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+have() { command -v "$1" >/dev/null 2>&1; }
+say()  { printf '%s\n' "$*"; }
+
+qt_conf() {   # qt_conf <qt5ct|qt6ct>
+    local d="$1" f="$config_dir/$1/$1.conf" scheme="$config_dir/$1/colors/matugen.conf"
+    mkdir -p "$config_dir/$d/colors"
+    if [ ! -s "$f" ]; then
+        cat >"$f" <<CONF
+[Appearance]
+color_scheme_path=$scheme
+custom_palette=true
+icon_theme=Adwaita
+standard_dialogs=default
+style=Fusion
+CONF
+        say "$d: wrote $f"
+        return
+    fi
+    cp -L -- "$f" "$f.bak-$(date +%Y%m%d_%H%M%S)" 2>/dev/null
+    for kv in "color_scheme_path=$scheme" "custom_palette=true" "style=Fusion"; do
+        key="${kv%%=*}"
+        if grep -q "^$key=" "$f"; then sed -i "s#^$key=.*#$kv#" "$f"
+        elif grep -q '^\[Appearance\]' "$f"; then sed -i "/^\[Appearance\]/a $kv" "$f"
+        else printf '[Appearance]\n%s\n' "$kv" >>"$f"; fi
+    done
+    say "$d: updated $f (backup next to it)"
+}
+
+init() {
+    qt_conf qt5ct
+    qt_conf qt6ct
+    if have gsettings; then
+        gsettings set org.gnome.desktop.interface color-scheme prefer-dark
+        gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3-dark
+        say "gtk: dark preference set"
+        # File dialogs remember their last size; one that was once huge stays huge. Reset to a
+        # comfortable default (hypr/rules.lua also sizes them when the window class matches).
+        local schema
+        for schema in org.gtk.Settings.FileChooser org.gtk.gtk4.Settings.FileChooser; do
+            if gsettings list-schemas 2>/dev/null | grep -qx "$schema"; then
+                gsettings set "$schema" window-size '(1000, 700)' 2>/dev/null && say "gtk: file dialog size reset ($schema)"
+            fi
+        done
+    fi
+    say "Restart the apps that were already open. Run 'dot-theme doctor' if one is still light."
+}
+
+doctor() {
+    local n=0 pkg
+    bad() { say "  - $*"; n=$((n + 1)); }
+    say "== packages =="
+    if have pacman; then
+        for pkg in adw-gtk-theme dconf xdg-desktop-portal-gtk gsettings-desktop-schemas qt5ct qt6ct; do
+            pacman -Qq "$pkg" >/dev/null 2>&1 && say "  ok       $pkg" || bad "$pkg not installed (pacman -S $pkg)"
+        done
+    else
+        say "  (not Arch: make sure adw-gtk3, dconf, xdg-desktop-portal-gtk and qt5ct/qt6ct are installed)"
+    fi
+    say; say "== GTK =="
+    if have gsettings; then
+        cs="$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null)"; th="$(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null)"
+        say "  color-scheme = $cs   gtk-theme = $th   backend = $(gsettings get org.gnome.desktop.interface color-scheme >/dev/null 2>&1 && echo "${GSETTINGS_BACKEND:-default}")"
+        [ "$cs" = "'prefer-dark'" ] || bad "color-scheme isn't prefer-dark (run: dot-theme init)"
+        have dconf || bad "dconf is missing: gsettings then uses a memory backend and the dark setting is forgotten immediately"
+    else
+        bad "gsettings not found (pacman -S glib2)"
+    fi
+    for v in 3 4; do
+        f="$config_dir/gtk-$v.0/settings.ini"
+        [ -f "$f" ] && say "  gtk-$v.0/settings.ini: $(grep -E 'prefer-dark|theme-name' "$f" | tr '\n' ' ')" || bad "$f missing (run install.sh)"
+    done
+    say; say "== Qt =="
+    say "  QT_QPA_PLATFORMTHEME=${QT_QPA_PLATFORMTHEME:-<unset>}"
+    for d in qt5ct qt6ct; do
+        f="$config_dir/$d/$d.conf"
+        if [ -s "$f" ] && grep -q 'custom_palette=true' "$f"; then say "  $d.conf: ok"; else bad "$d.conf missing or without the matugen palette (run: dot-theme init)"; fi
+    done
+    say
+    [ "$n" -eq 0 ] && say "Theming looks right. Apps that were open before the change need a restart." || say "$n problem(s) above."
+}
+
+case "${1:-}" in
+    init) init ;;
+    doctor) doctor ;;
+    -h|--help|"") sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *) echo "dot-theme: unknown command: $1" >&2; exit 2 ;;
+esac

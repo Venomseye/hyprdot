@@ -182,6 +182,17 @@ start_shell() {
         return 0
     fi
 
+    # Only one daemon can own org.freedesktop.Notifications. While Quickshell is down, the first
+    # notify-send makes D-Bus start mako/dunst, and then Quickshell can't register ("Could not
+    # register notification server"). Stop them; Quickshell shows notifications itself.
+    local d
+    for d in mako dunst; do
+        if pgrep -x "$d" >/dev/null 2>&1; then
+            say "$d: stopping (Quickshell shows notifications itself)"
+            pkill -x "$d" 2>/dev/null || true
+        fi
+    done
+
     mkdir -p "$cache_dir"
     if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 262144 ]; then : >"$LOG"; fi
     printf '\n=== %s dot-reload\n' "$(date -Is)" >>"$LOG"

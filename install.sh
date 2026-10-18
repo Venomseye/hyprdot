@@ -107,6 +107,10 @@ GENERATED_FILES=(
     "ghostty/colors-matugen"
     "gtk-3.0/colors.css"
     "gtk-4.0/colors.css"
+    "gtk-3.0/settings.ini"
+    "gtk-4.0/settings.ini"
+    "qt5ct/colors/matugen.conf"
+    "qt6ct/colors/matugen.conf"
 )
 
 # Directories that are real dirs with per-file links even though they hold no
@@ -155,6 +159,7 @@ PKGS_CORE=(
 PKGS_EXTRA=(
     hyprsunset hyprshutdown kitty btop nautilus firefox pavucontrol blueman wev
     pacman-contrib adw-gtk-theme noto-fonts-emoji ttf-jetbrains-mono-nerd bibata-cursor-theme
+    dconf xdg-desktop-portal-gtk gsettings-desktop-schemas qt5ct qt6ct
 )
 
 NOCONFIRM=()
@@ -461,8 +466,7 @@ seed_generated() {
             # writing into the checkout. Keep the live content, make it a real file.
             say "unlink     $label   (was a link into the repo; matugen output must be a real file)"
             if $DRY_RUN; then
-                printf '  would: replace the link with a real copy of its contents
-'
+                printf '  would: replace the link with a real copy of its contents\n'
             else
                 tmp="$(mktemp)" && cp -L -- "$target" "$tmp" && rm -- "$target" && mv -- "$tmp" "$target" \
                     || { err "couldn't convert $label to a real file"; ERRORS=$((ERRORS + 1)); rm -f -- "${tmp:-}"; return 1; }
@@ -590,6 +594,14 @@ install_wallpapers() {
     say ""
 }
 
+# Qt/GTK dark mode setup (qt5ct/qt6ct config with this machine's paths, GTK preference).
+install_theming() {
+    [ -f "$BIN_SRC/dot-theme" ] || return 0
+    say "=== Theming (dark mode for GTK and Qt apps) ==="
+    if $DRY_RUN; then say "would: dot-theme init"; else bash "$BIN_SRC/dot-theme" init || warn "dot-theme init reported a problem (run: dot-theme doctor)"; fi
+    say ""
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -602,6 +614,7 @@ make_executable
 install_config
 install_bin
 install_wallpapers
+install_theming
 
 # Leftovers from the old Waybar/Rofi/Mako setup. Reported, never touched.
 stale=()

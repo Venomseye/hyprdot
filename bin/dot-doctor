@@ -36,6 +36,21 @@ report() {
     echo "dot-doctor  $(date -Is)"
 
     # ------------------------------------------------------------------
+    sec "which copy of the dotfiles is installed"
+    self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    repo="$(dirname "$(dirname "$self")")"
+    if [ -f "$repo/VERSION" ]; then
+        echo "  repo: $repo   version: $(head -n 1 "$repo/VERSION")"
+    else
+        echo "  repo: $repo   version: unknown (no VERSION file - an older snapshot)"
+    fi
+    qsd="$(readlink -f "$config/quickshell" 2>/dev/null || true)"
+    echo "  ~/.config/quickshell -> ${qsd:-<missing>}"
+    for b in dot-theme dot-screenshot dot-clip dot-snippets; do
+        [ -e "$repo/bin/$b" ] || echo "  note: $repo/bin/$b does not exist in this copy"
+    done
+
+    # ------------------------------------------------------------------
     sec "session"
     echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-<unset>}  WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>}  DISPLAY=${DISPLAY:-<unset>}"
     echo "HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE:-<unset>}"
@@ -91,7 +106,7 @@ report() {
     pgrep -x wpaperd    >/dev/null 2>&1 || issue "wpaperd is not running - no wallpaper (black screen). See the wpaperd section"
     pgrep -x quickshell >/dev/null 2>&1 || issue "quickshell is not running - no bar/menu/notifications. See ~/.cache/quickshell.log below"
     for p in mako dunst; do
-        pgrep -x "$p" >/dev/null 2>&1 && issue "$p is running - it owns the notification bus name, so Quickshell can't show notifications. Stop it"
+        pgrep -x "$p" >/dev/null 2>&1 && issue "$p is running - it owns the notification bus name, so Quickshell can't show notifications. Fix: pkill -x $p; dot-reload shell   (if it comes back by itself, D-Bus is starting it: systemctl --user mask $p.service, or pacman -Rns $p)"
     done
     pgrep -x waybar >/dev/null 2>&1 && issue "waybar is still running next to the Quickshell bar"
 
@@ -158,17 +173,25 @@ report() {
         echo "  --- qs log (last 30 lines)"
         timeout 5 qs log 2>&1 | tail -n 30 | sed 's/^/  /'
     fi
-    if grep -qiE 'could not find the qt platform plugin|no qt platform plugin|xcb|eglfs|DRM_IOCTL_MODE_CREATE_DUMB' "$cache/quickshell.log" 2>/dev/null; then
+    # Only the CURRENT run counts: the log is appended to forever, so errors from before you fixed
+    # something would otherwise be reported on every future doctor run.
+    qslog_now="$(awk '/Launching config/ { n = NR } { l[NR] = $0 } END { for (i = (n ? n : 1); i <= NR; i++) print l[i] }' "$cache/quickshell.log" 2>/dev/null)"
+    if printf '%s\n' "$qslog_now" | grep -qiE 'could not find the qt platform plugin|no qt platform plugin|xcb|eglfs|DRM_IOCTL_MODE_CREATE_DUMB'; then
         issue "quickshell.log shows a Qt platform / DRM problem - see the graphics-access and qt6-wayland checks above"
     fi
-    if sed 's/\x1b\[[0-9;]*m//g' "$cache/quickshell.log" 2>/dev/null \
+    if printf '%s\n' "$qslog_now" | sed 's/\x1b\[[0-9;]*m//g' \
         | grep -iE 'error|failed to load|unavailable|is not a type|not installed|cannot assign' \
-        | grep -viE 'NoActivePlayer|playerctld|File does not exist|Reloading' | grep -q .; then
-        issue "quickshell.log contains real errors - see the section above and send it"
+        | grep -viE 'NoActivePlayer|playerctld|File does not exist|Reloading|host portal|page-flip' | grep -q .; then
+        issue "quickshell.log (since the last start) contains real errors - see the section above and send it"
     fi
     echo "  (playerctld 'NoActivePlayer' and 'File does not exist' warnings are harmless)"
 
     # ------------------------------------------------------------------
+    sec "theming (why some apps stay light)"
+    if have dot-theme; then dot-theme doctor 2>&1 | sed 's/^/  /'
+    elif [ -x "$HOME/.local/bin/dot-theme" ]; then "$HOME/.local/bin/dot-theme" doctor 2>&1 | sed 's/^/  /'
+    else echo "  dot-theme is not installed - run install.sh"; fi
+
     sec "keyboard (Compose key / Right Alt)"
     if have dot-restart-xcompose; then
         dot-restart-xcompose --check 2>&1 | sed 's/^/  /'
@@ -186,6 +209,14 @@ report() {
         hyprctl submap 2>/dev/null | sed 's/^/  active submap: /'
     else
         echo "  (not inside a Hyprland session - skipped)"
+    fi
+
+    sec "windows (class / title / floating / size - what rules.lua matches against)"
+    if have hyprctl && have jq && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        hyprctl clients -j 2>/dev/null | jq -r '.[] | "  class=\(.class)  floating=\(.floating)  size=\(.size[0])x\(.size[1])  title=\(.title[0:60])"'
+        echo "  (a file dialog's class only shows while it is open: run  sleep 5; dot-doctor  and open the dialog)"
+    else
+        echo "  (needs hyprctl and jq inside a Hyprland session - skipped)"
     fi
 
     sec "menu commands (everything the menu can run)"
@@ -206,6 +237,22 @@ report() {
         done
     else
         echo "  $mj not found"
+    fi
+
+    sec "failed services (the [FAILED] lines you see on the console after logging out)"
+    if have systemctl; then
+        sysfail="$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}')"
+        usrfail="$(systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}')"
+        if [ -z "$sysfail$usrfail" ]; then
+            echo "  none"
+        else
+            [ -n "$sysfail" ] && printf '  system: %s\n' "$(echo $sysfail)"
+            [ -n "$usrfail" ] && printf '  user:   %s\n' "$(echo $usrfail)"
+            issue "failed services: $(echo $sysfail $usrfail). See each with: systemctl status <name>; disable ones you don't use: sudo systemctl disable --now <name>"
+            echo "$sysfail" | grep -qx 'samba.service' && issue "samba.service (\"Samba AD Daemon\") fails at boot - it only makes sense on a domain controller. Fix: sudo systemctl disable --now samba   (file sharing uses smb/nmb, not this)"
+        fi
+    else
+        echo "  systemctl not found"
     fi
 
     sec "hook logs"

@@ -21,6 +21,9 @@ building `yay` for you if you have none). Restart Hyprland afterwards.
 | `dot-updates` | pending updates for the bar (Arch, Debian, Fedora, openSUSE, Void, Alpine) |
 | `dot-power lock\|suspend\|logout\|reboot\|shutdown` | session actions with fallbacks (used by the menu and `Super+L`) |
 | `dot-snippets` | text/emoji snippets for the menu (clipboard based) |
+| `dot-clip` | clipboard history entries for the menu (cliphist) |
+| `dot-screenshot screen\|all\|region\|window [--edit]` | screenshots: active display, everything, selection, window |
+| `dot-theme init\|doctor` | make GTK and Qt apps follow dark mode and the wallpaper colours |
 | `dot-doctor` | read-only diagnosis of black screen / no bar / keyboard / menu commands |
 | `dot-restart-xcompose` | regenerate `~/.XCompose` |
 

@@ -7,8 +7,8 @@
 #   lock      loginctl lock-session (hypridle then runs hyprlock). If hypridle isn't
 #             running that does nothing, so hyprlock is started directly instead.
 #   suspend   systemctl suspend (hypridle's before_sleep_cmd locks first).
-#   logout    hyprshutdown (closes windows cleanly) if installed, else
-#             loginctl terminate-user.
+#   logout    hyprshutdown (closes windows cleanly) if installed, then ends this session with
+#             loginctl terminate-session (terminate-user only if the session id is unknown).
 #   reboot / shutdown
 #             hyprshutdown if installed, else plain systemctl.
 #
@@ -51,7 +51,15 @@ case "${1:-}" in
         ;;
     logout)
         have loginctl || complain "loginctl not found"
-        via_hyprshutdown loginctl terminate-user "$USER"
+        # End this login session only. `terminate-user` also kills your other sessions
+        # (a TTY, ssh), tmux and every user service - far more than "log out".
+        sid="${XDG_SESSION_ID:-}"
+        [ -n "$sid" ] || sid="$(loginctl show-user "$USER" -p Display --value 2>/dev/null)"
+        if [ -n "$sid" ]; then
+            via_hyprshutdown loginctl terminate-session "$sid"
+        else
+            via_hyprshutdown loginctl terminate-user "$USER"
+        fi
         ;;
     reboot)
         have systemctl || complain "systemctl not found"

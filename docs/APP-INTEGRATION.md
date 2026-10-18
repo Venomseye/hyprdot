@@ -1,5 +1,9 @@
 # Making apps read the matugen colours
 
+The repo now ships `config/kitty/kitty.conf` and `config/ghostty/config`, which already include
+the colour files (and turn off the "close this window?" prompt). Only merge the lines below
+into your own files if you keep your own copies.
+
 install.sh seeds a `colors-matugen*` file for each app; matugen overwrites it on
 every wallpaper change. Each app still has to be told to *read* it. Add these
 lines to your existing config files (they're not shipped, so your own settings

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# Clipboard history for the Quickshell menu (uses cliphist; autostart already runs
+# `wl-paste --watch cliphist store`).
+#
+#   dot-clip --menu     JSON for the menu: a "Clipboard" category with the last 30 entries
+#   dot-clip copy <id>  put entry <id> back on the clipboard
+#   dot-clip wipe       clear the history
+#   dot-clip -h         this message
+#
+# In the menu: Super+V, pick an entry, then paste with Ctrl+V.
+
+set -uo pipefail
+
+have() { command -v "$1" >/dev/null 2>&1; }
+note() { have notify-send && notify-send -a clipboard "$@"; }
+
+jesc() {
+    local s="$1"
+    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/ }"; s="${s//$'\t'/ }"; s="${s//$'\r'/ }"
+    printf '%s' "$s"
+}
+
+menu_json() {
+    local items=() line id prev n=0
+    if have cliphist; then
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            id="${line%%$'\t'*}"
+            prev="${line#*$'\t'}"
+            [[ "$id" =~ ^[0-9]+$ ]] || continue
+            prev="$(printf '%s' "$prev" | tr -s '[:space:]' ' ')"
+            prev="${prev# }"
+            [ "${#prev}" -gt 70 ] && prev="${prev:0:69}…"
+            [ -n "$prev" ] || prev="(blank)"
+            items+=("{\"title\":\"$(jesc "$prev")\",\"glyph\":\"\\uf0c5\",\"subtitle\":\"#$id\",\"action\":\"dot-clip copy $id\"}")
+            n=$((n + 1))
+            [ "$n" -ge 30 ] && break
+        done < <(cliphist list 2>/dev/null)
+    fi
+    if [ "$n" -eq 0 ]; then
+        items+=("{\"title\":\"Nothing copied yet\",\"glyph\":\"\\uf0ea\",\"subtitle\":\"$(have cliphist || echo 'cliphist is not installed')\",\"action\":\"true\"}")
+    else
+        items+=("{\"title\":\"Clear history\",\"glyph\":\"\\uf1f8\",\"subtitle\":\"\",\"action\":\"dot-clip wipe\",\"confirm\":true,\"notify\":true}")
+    fi
+    local IFS=,
+    printf '[{"title":"Clipboard","glyph":"\\uf0ea","subtitle":"Recent copies","children":[%s]}]\n' "${items[*]}"
+}
+
+case "${1:-}" in
+    --menu) menu_json ;;
+    copy)
+        [ -n "${2:-}" ] || { echo "dot-clip: need an entry id" >&2; exit 2; }
+        have cliphist || { note -u critical "Clipboard" "cliphist is not installed"; exit 1; }
+        have wl-copy  || { note -u critical "Clipboard" "wl-copy is not installed (wl-clipboard)"; exit 1; }
+        if cliphist decode "$2" | wl-copy; then note "Copied" "Paste with Ctrl+V"; else note -u critical "Clipboard" "couldn't restore entry $2"; exit 1; fi
+        ;;
+    wipe)
+        have cliphist || exit 1
+        cliphist wipe && echo "Clipboard history cleared"
+        ;;
+    -h|--help|"") sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *) echo "dot-clip: unknown option: $1" >&2; exit 2 ;;
+esac
