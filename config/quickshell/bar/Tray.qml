@@ -48,7 +48,7 @@ Item {
                 required property var modelData
 
                 visible: root.revealed
-                implicitSize: 16
+                implicitSize: 18
                 source: modelData.icon
 
                 MouseArea {

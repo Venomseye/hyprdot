@@ -60,7 +60,7 @@ Scope {
         Rectangle {
             anchors.fill: parent
             radius: Style.radius
-            color: Colors.surfaceContainer
+            color: Colors.alpha(Colors.surfaceContainer, Style.panelOpacity)
             border.width: 1
             border.color: Colors.outlineVariant
 
@@ -102,7 +102,7 @@ Scope {
                 width: 38
                 horizontalAlignment: Text.AlignRight
                 text: root.muted ? "mute" : Math.round(root.level * 100) + "%"
-                font.pixelSize: 12
+                font.pixelSize: 13
                 color: Colors.surfaceVariantOn
             }
         }

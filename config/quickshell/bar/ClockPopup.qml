@@ -34,6 +34,7 @@ PanelWindow {
         centerX = cx;
         if (win && win.screen) screen = win.screen;
         visible = true;
+        appear.restart();
         idle.restart();
         Qt.callLater(() => keys.forceActiveFocus());
     }
@@ -69,15 +70,22 @@ PanelWindow {
         Keys.onEscapePressed: popup.visible = false
     }
 
+    ParallelAnimation {
+        id: appear
+        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
+        NumberAnimation { target: card; property: "slide"; from: -8; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
+    }
+
     Rectangle {
         id: card
 
+        property real slide: 0
         width: 292
         height: 262
         x: Math.max(Style.gap, Math.min(popup.centerX - width / 2, popup.width - width - Style.gap))
-        y: 4
+        y: 4 + slide
         radius: Style.radius
-        color: Colors.surfaceContainer
+        color: Colors.alpha(Colors.surfaceContainer, Style.panelOpacity)
         border.width: 1
         border.color: Colors.outlineVariant
 
@@ -136,7 +144,7 @@ PanelWindow {
                         horizontalAlignment: Text.AlignHCenter
                         text: modelData
                         color: index === 0 ? Colors.outline : Colors.surfaceVariantOn
-                        font.pixelSize: 11
+                        font.pixelSize: 12
                     }
                 }
 
@@ -167,7 +175,7 @@ PanelWindow {
 
                         Txt {
                             anchors.centerIn: parent
-                            font.pixelSize: cell.isWeek ? 11 : Style.fontSize
+                            font.pixelSize: cell.isWeek ? 12 : Style.fontSize
                             font.bold: cell.today
                             text: cell.isWeek ? Cal.isoWeek(cell.d) : cell.d.getDate()
                             color: cell.today ? Colors.primaryOn

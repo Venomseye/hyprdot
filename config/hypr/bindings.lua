@@ -35,7 +35,9 @@ end
 ---------------------
 
 local terminal = "kitty"
-local fileManager = "nautilus"
+-- Nautilus is single-instance (D-Bus activated): plain `nautilus` just re-activates the
+-- running one. --new-window forces a fresh window every time.
+local fileManager = "nautilus --new-window"
 local browser = "firefox"
 
 ---------------------
@@ -69,9 +71,13 @@ hl.bind(mainMod .. " + CTRL + SHIFT + W", hl.dsp.exec_cmd(guarded("dot-wallpaper
 hl.bind(mainMod .. " + B", hl.dsp.exec_cmd(guarded("firefox", browser)))
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(guarded("nautilus", fileManager)))
 
--- TODO: the old rofi calculator (Super+C) and clipboard history (Super+Shift+C)
--- have no Quickshell menu equivalent yet. Add them as entries in
--- quickshell/menu/menu.json (or menu.user.json) when you want them.
+-- Clipboard history and calculator live in the same menu:
+hl.bind(mainMod .. " + V", hl.dsp.exec_cmd(qs_ipc("shell", "menu Clipboard")))
+hl.bind(mainMod .. " + C", hl.dsp.exec_cmd(qs_ipc("shell", "calc")))
+
+-- Quick settings (volume, brightness, Wi-Fi, Bluetooth, toggles) and the wallpaper picker.
+hl.bind(mainMod .. " + A", hl.dsp.exec_cmd(qs_ipc("shell", "toggle quick")))
+hl.bind(secondMod .. " + W", hl.dsp.exec_cmd(qs_ipc("shell", "toggle wallpapers")))
 
 ---------------------
 ---- WINDOW MGMT ----
@@ -223,34 +229,56 @@ hl.bind(
 	{ locked = true, repeating = true }
 )
 
--- -i playerctld keeps the daemon's own proxy player out of the selection.
-hl.bind("XF86AudioNext", hl.dsp.exec_cmd(guarded("playerctl", "playerctl -i playerctld next")), { locked = true })
-hl.bind("XF86AudioPause", hl.dsp.exec_cmd(guarded("playerctl", "playerctl -i playerctld play-pause")), { locked = true })
-hl.bind("XF86AudioPlay", hl.dsp.exec_cmd(guarded("playerctl", "playerctl -i playerctld play-pause")), { locked = true })
-hl.bind("XF86AudioPrev", hl.dsp.exec_cmd(guarded("playerctl", "playerctl -i playerctld previous")), { locked = true })
+-- Media keys go through Quickshell, so they control the same player the bar shows (a playing one
+-- first). If the shell isn't running they fall back to playerctl.
+local function media_key(action, playerctl_cmd)
+	return "qs ipc call shell media " .. action .. " >/dev/null 2>&1 || { command -v playerctl >/dev/null 2>&1 && playerctl -i playerctld "
+		.. playerctl_cmd .. "; }"
+end
+
+hl.bind("XF86AudioNext", hl.dsp.exec_cmd(media_key("next", "next")), { locked = true })
+hl.bind("XF86AudioPause", hl.dsp.exec_cmd(media_key("playpause", "play-pause")), { locked = true })
+hl.bind("XF86AudioPlay", hl.dsp.exec_cmd(media_key("playpause", "play-pause")), { locked = true })
+hl.bind("XF86AudioPrev", hl.dsp.exec_cmd(media_key("previous", "previous")), { locked = true })
 
 ---------------------
 ---- SCREENSHOTS ----
 ---------------------
 
--- Full screen -> saved + copied to clipboard
-hl.bind(
-	"PRINT",
-	hl.dsp.exec_cmd(guarded(
-		{ "grim", "wl-copy" },
-		"mkdir -p ~/Pictures/Screenshots && "
-			.. "f=~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png && "
-			.. "grim - | tee \"$f\" | wl-copy && "
-			.. "notify-send 'Screenshot saved' \"$(basename \"$f\")\""
-	))
-)
+-- dot-screenshot saves to ~/Pictures/Screenshots, copies to the clipboard and notifies.
+hl.bind("PRINT", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot screen")))               -- the display you're on
+hl.bind("SHIFT + PRINT", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot all")))          -- everything
+hl.bind("CTRL + PRINT", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot region")))        -- drag a selection
+hl.bind("ALT + PRINT", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot window")))         -- focused window
+hl.bind(mainMod .. " + CTRL + S", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot region --edit")))  -- selection + annotate
 
--- Region select with annotation -> saved via satty's save dialog
-hl.bind(
-	mainMod .. " + CTRL + S",
-	hl.dsp.exec_cmd(guarded(
-		{ "grim", "slurp", "satty" },
-		"mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" - | "
-			.. "satty --filename - --output-filename ~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
-	))
-)
+---------------------------------------
+---- WORKSPACES AND MONITORS (ML4W) ----
+---------------------------------------
+
+-- Cycle workspaces; jump to the first empty one.
+hl.bind(mainMod .. " + TAB", hl.dsp.focus({ workspace = "e+1" }))
+hl.bind(secondMod .. " + TAB", hl.dsp.focus({ workspace = "e-1" }))
+hl.bind(mainMod .. " + CTRL + TAB", hl.dsp.focus({ workspace = "empty" }))
+
+-- Send a window to a workspace WITHOUT following it (Super+Shift+N follows).
+for i = 1, 10 do
+	local key = i % 10
+	hl.bind(mainMod .. " + CTRL + " .. key, hl.dsp.window.move({ workspace = i, follow = false }))
+end
+
+-- Monitor focus: Super+Alt+Arrows (or Super+, / Super+. to go to the previous / next one).
+hl.bind(mainMod .. " + ALT + LEFT", hl.dsp.focus({ monitor = "l" }))
+hl.bind(mainMod .. " + ALT + RIGHT", hl.dsp.focus({ monitor = "r" }))
+hl.bind(mainMod .. " + ALT + UP", hl.dsp.focus({ monitor = "u" }))
+hl.bind(mainMod .. " + ALT + DOWN", hl.dsp.focus({ monitor = "d" }))
+hl.bind(mainMod .. " + comma", hl.dsp.focus({ monitor = "-1" }))
+hl.bind(mainMod .. " + period", hl.dsp.focus({ monitor = "+1" }))
+
+-- Move the focused window to another monitor: Super+Alt+Shift+Arrows (or Super+Shift+, / .).
+hl.bind(mainMod .. " + ALT + SHIFT + LEFT", hl.dsp.window.move({ monitor = "l" }))
+hl.bind(mainMod .. " + ALT + SHIFT + RIGHT", hl.dsp.window.move({ monitor = "r" }))
+hl.bind(mainMod .. " + ALT + SHIFT + UP", hl.dsp.window.move({ monitor = "u" }))
+hl.bind(mainMod .. " + ALT + SHIFT + DOWN", hl.dsp.window.move({ monitor = "d" }))
+hl.bind(secondMod .. " + comma", hl.dsp.window.move({ monitor = "-1" }))
+hl.bind(secondMod .. " + period", hl.dsp.window.move({ monitor = "+1" }))

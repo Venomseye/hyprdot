@@ -11,7 +11,7 @@
 #           ~/.config/hooks/theme-set.d/ in parallel
 #
 # The hook returns immediately so wpaperd never waits on matugen or on a slow
-# reload. If several wallpaper changes queue up (holding SUPER+SHIFT+W, l), the
+# reload. If several wallpaper changes queue up (holding SUPER+CTRL+W), the
 # lock serialises them and only the newest one is actually applied.
 #
 # Deliberately NOT using `set -e`: a failing step must not look like a wpaperd
@@ -32,7 +32,7 @@ RUN_HOOKS="$config_dir/hooks/run-hooks"
 log() { printf '%s  %s\n' "$(date -Is)" "$*" >>"$LOG"; }
 
 # Make sure matugen's output directories exist.
-mkdir -p "$cache_dir" "$config_dir/quickshell/theme" "$config_dir/btop/themes"
+mkdir -p "$cache_dir" "$config_dir/quickshell/theme" "$config_dir/btop/themes" "$config_dir/qt5ct/colors" "$config_dir/qt6ct/colors"
 
 if [ -z "$wallpaper" ]; then
     log "no wallpaper argument given, nothing to do"
@@ -74,9 +74,47 @@ apply_theme() {
     # picker and there's no terminal here, so without it matugen dies with
     # "IO error: Input/output error (os error 5)". source_color_index in
     # matugen/config.toml is the real fix; this is belt and braces.
-    matugen image "$wallpaper" --source-color-index 0 </dev/null 2>&1
+    # Optional colour-scheme settings from `dot-wallpaper theme` (mode light|dark and a
+    # scheme style). If matugen rejects them for any reason, retry plain so a bad
+    # setting can never leave the desktop without colours.
+    local conf="${XDG_STATE_HOME:-$HOME/.local/state}/dot-wallpaper/theme.conf" mode="" style="" opts=()
+    if [ -r "$conf" ]; then
+        mode="$(sed -n 's/^MODE=//p' "$conf" | head -n 1)"
+        style="$(sed -n 's/^STYLE=//p' "$conf" | head -n 1)"
+    fi
+    [ "$mode" = light ] && opts+=(-m light)
+    [ -n "$style" ] && [ "$style" != tonal-spot ] && opts+=(-t "scheme-$style")
+    export THEME_MODE="${mode:-${THEME_MODE:-dark}}"
+
+    # wpaperd runs this hook once PER DISPLAY, all with the same wallpaper. Without this
+    # check matugen and every reload hook ran twice per change. Mode/style are part of the
+    # key, so changing the scheme on the same wallpaper is never skipped.
+    local key="$wallpaper|${mode:-dark}|${style:-tonal-spot}" stamp="$cache_dir/matugen-last-applied" age
+    if [ -r "$stamp" ] && [ "$(head -n 1 "$stamp" 2>/dev/null)" = "$key" ]; then
+        age=$(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || echo 0) ))
+        if [ "$age" -ge 0 ] && [ "$age" -lt 8 ]; then
+            log "already applied ${age}s ago (another display), skipping $wallpaper"
+            return 0
+        fi
+    fi
+
+    matugen image "$wallpaper" --source-color-index 0 "${opts[@]}" </dev/null 2>&1
     rc=$?
+    if [ "$rc" -ne 0 ] && [ "${#opts[@]}" -gt 0 ]; then
+        # first keep just the light/dark choice, then nothing at all
+        if [ "$mode" = light ] && [ "${#opts[@]}" -gt 2 ]; then
+            printf 'matugen rejected %s (exit %d) - retrying with only -m light\n' "${opts[*]}" "$rc"
+            matugen image "$wallpaper" --source-color-index 0 -m light </dev/null 2>&1
+            rc=$?
+        fi
+        if [ "$rc" -ne 0 ]; then
+            printf 'matugen rejected its options (exit %d) - retrying plain\n' "$rc"
+            matugen image "$wallpaper" --source-color-index 0 </dev/null 2>&1
+            rc=$?
+        fi
+    fi
     printf 'matugen exit=%d\n' "$rc"
+    [ "$rc" -eq 0 ] && printf '%s\n' "$key" >"$stamp" 2>/dev/null
 
     if [ "$rc" -ne 0 ]; then
         log "matugen failed (exit $rc) - theme-set hooks skipped so nothing reloads stale colours"
@@ -88,7 +126,7 @@ apply_theme() {
         return 0
     fi
 
-    export THEME_WALLPAPER="$wallpaper" THEME_DISPLAY="$display" THEME_MODE="${THEME_MODE:-dark}"
+    export THEME_WALLPAPER="$wallpaper" THEME_DISPLAY="$display"
     "$RUN_HOOKS" theme-set "$wallpaper" "$display"
 }
 

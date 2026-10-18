@@ -23,13 +23,19 @@ Rectangle {
 
     implicitHeight: Math.max(36, textCol.implicitHeight) + 24
     radius: Style.radius
-    color: Colors.surfaceContainer
+    color: Colors.alpha(Colors.surfaceContainer, Style.panelOpacity)
     border.width: critical ? 2 : 1
     border.color: critical ? Colors.error : Colors.outlineVariant
 
+    // slides in from the right while fading in
     opacity: 0
-    Component.onCompleted: opacity = 1
-    Behavior on opacity { NumberAnimation { duration: 150 } }
+    transform: Translate { id: shift; x: 36 }
+    Component.onCompleted: {
+        opacity = 1;
+        slideIn.start();
+    }
+    Behavior on opacity { NumberAnimation { duration: Style.animMs } }
+    NumberAnimation { id: slideIn; target: shift; property: "x"; from: 36; to: 0; duration: Style.animMs + 40; easing.type: Easing.OutCubic }
 
     HoverHandler { id: hover }
 
@@ -84,7 +90,7 @@ Rectangle {
             width: parent.width
             text: toast.notif.appName
             color: Colors.surfaceVariantOn
-            font.pixelSize: 11
+            font.pixelSize: 12
             elide: Text.ElideRight
         }
         Txt {
@@ -125,7 +131,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: parent.modelData.text
                         color: Colors.primaryContainerOn
-                        font.pixelSize: 12
+                        font.pixelSize: 13
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -142,6 +148,6 @@ Rectangle {
         anchors.margins: 8
         text: "\uf00d"
         color: Colors.surfaceVariantOn
-        font.pixelSize: 11
+        font.pixelSize: 12
     }
 }

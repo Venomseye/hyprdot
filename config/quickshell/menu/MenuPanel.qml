@@ -9,12 +9,19 @@ import Quickshell.Wayland
 import qs.theme
 import qs.services
 import "Fuzzy.js" as Fuzzy
+import "Calc.js" as Calc
 
 // One searchable, nested menu for apps and commands (Super+Space).
 //   type          fuzzy/acronym search across apps AND every command
 //   Up/Down/Enter move and run; Enter on a category opens it
-//   Backspace     on an empty field: back up a level
-//   Esc           close the menu (so does clicking outside, or 30s without activity)
+//   Esc           one step back: clears the search, then leaves the category you are in, then
+//                 closes the menu at the top. (Opened straight into a category by a keybind,
+//                 e.g. Super+Shift+P -> System, Esc closes.) Backspace on an empty field = back.
+//                 Clicking outside, or 30s without activity, also closes.
+//   mouse/keyboard  the highlight follows whichever you used last: hovering only selects
+//                 once the mouse really MOVES, so a menu that opens under a resting
+//                 pointer isn't hijacked
+//   =2*(3+4)      calculator: Enter copies the result (also tried on plain 2*(3+4))
 //   Anything with "confirm": true (power actions) asks for a second Enter
 // Commands come from menu.json (shipped) and ~/.config/quickshell/menu.user.json
 // (yours, appended to the top level). Same format: title, glyph, subtitle,
@@ -26,13 +33,19 @@ PanelWindow {
     property var extra: []
     property var path: []          // categories entered so far
     property string query: ""
+    property bool direct: false         // opened straight into a category by a keybind
     property var pending: null          // node waiting for a second Enter (confirm)
+    property bool mouseMode: false      // true once the mouse moved after the last key press
+    property real lastX: -1             // last real pointer position (scene coords)
+    property real lastY: -1
     property int selected: 0
     property int viewStart: 0           // first visible row; the list scrolls
     readonly property int pageSize: 9
 
     readonly property bool shown: ShellState.menuOpen
-    property var generated: []          // Snippets / Emoji from dot-snippets
+    property var snipNodes: []          // Snippets / Emoji (dot-snippets)
+    property var clipNodes: []          // Clipboard history (dot-clip)
+    readonly property var generated: snipNodes.concat(clipNodes)
     readonly property var tree: base.concat(generated).concat(extra)
     readonly property var level: path.length > 0 ? path[path.length - 1].children : tree
     readonly property var rows: buildRows(query, level, path)
@@ -67,6 +80,26 @@ PanelWindow {
     function buildRows(q, nodes, trail) {
         const term = q.trim().toLowerCase();
 
+        // Calculator: "=..." is calculator-only; plain "12*(3+4)" adds a result row on top.
+        const calcMode = term.startsWith("=");
+        let calcRow = null;
+        const expr = calcMode ? term.slice(1).trim() : term;
+        if (expr !== "" && (calcMode || Calc.looksLikeMath(expr))) {
+            const r = Calc.evaluate(expr);
+            if (r.ok) {
+                const shownValue = Calc.format(r.value);
+                calcRow = { title: "= " + shownValue, subtitle: "Enter copies the result", glyph: "\uf1ec",
+                            calc: shownValue, children: false, score: 1000 };
+            }
+        }
+        if (calcMode) {
+            return [calcRow ? calcRow : {
+                title: expr === "" ? "Type a calculation" : "Can't calculate that",
+                subtitle: "e.g.  2*(3+4)   sqrt(81)   2^10   100/8   pi*5^2",
+                glyph: "\uf1ec", hint: true, children: false, score: 0
+            }];
+        }
+
         if (term === "") {
             return nodes.map(n => ({
                 title: n.title,
@@ -100,37 +133,30 @@ PanelWindow {
         }
 
         out.sort((x, y) => (y.score - x.score) || x.title.localeCompare(y.title));
+        if (calcRow) out.unshift(calcRow);
         return out.slice(0, 60);
     }
 
     // ---- actions ------------------------------------------------------------
 
-    // Runs a menu command. ~/.local/bin is put on PATH first (dot-reload and friends
-    // live there). With `report` the command's output (or failure) comes back as a
-    // notification - commands run with no terminal, so silence looks like "broken".
     function execAction(action, title, report) {
-        if (!action) return;
-        const bin = action.trim().split(/\s+/)[0];
-        const check = 'PATH="$HOME/.local/bin:$PATH"; export PATH; ' +
-            'if ! command -v "$1" >/dev/null 2>&1; then ' +
-            'command -v notify-send >/dev/null 2>&1 && notify-send -u critical "$3" "$1 is not installed (run install.sh)"; exit 127; fi; ';
-        const body = report
-            ? 'out="$(eval "$2" 2>&1)"; rc=$?; msg="$(printf "%s" "$out" | tail -n 4)"; ' +
-              'if [ $rc -eq 0 ]; then notify-send -a menu "$3" "${msg:-Done}"; ' +
-              'else notify-send -u critical -a menu "$3 failed" "${msg:-exit code $rc}"; fi'
-            : 'eval "$2"';
-        Quickshell.execDetached(["sh", "-c", check + body, "sh", bin, action, title || "Menu"]);
+        Run.exec(action, title, report);
     }
 
     function run(row) {
-        if (!row) return;
+        if (!row || row.hint) return;
+        if (row.calc !== undefined) {
+            ShellState.menuOpen = false;
+            Run.sh('printf %s "$1" | wl-copy && notify-send -a calculator "Copied" "$1"', [row.calc]);
+            return;
+        }
         if (row.children) {
             path = path.concat([row.node]);
             clearQuery();
             return;
         }
         // Destructive entries need a second Enter.
-        if (row.node && row.node.confirm && pending !== row.node) {
+        if (row.node && row.node.confirm && Style.confirmPower && pending !== row.node) {
             pending = row.node;
             idle.restart();
             return;
@@ -141,11 +167,20 @@ PanelWindow {
         else execAction(row.action, row.title, row.node && row.node.notify === true);
     }
 
+    // Keyboard navigation: also hands control back from the mouse.
+    function keySelect(i) {
+        mouseMode = false;
+        select(i);
+    }
+
     // Move the highlight; the window of visible rows follows it.
     function select(i) {
         if (rows.length === 0) return;
-        selected = Math.max(0, Math.min(i, rows.length - 1));
-        pending = null;
+        const next = Math.max(0, Math.min(i, rows.length - 1));
+        // Moving to a DIFFERENT row cancels a pending "press Enter again". Hovering the row that is
+        // already selected must not: a resting hand nudging the mouse made every confirm start over.
+        if (next !== selected) pending = null;
+        selected = next;
         idle.restart();
         if (selected < viewStart) viewStart = selected;
         else if (selected >= viewStart + pageSize) viewStart = selected - pageSize + 1;
@@ -175,7 +210,7 @@ PanelWindow {
 
     function back() {
         if (query !== "") { clearQuery(); return; }
-        if (path.length > 0) { path = path.slice(0, -1); selected = 0; viewStart = 0; return; }
+        if (path.length > (direct ? 1 : 0)) { path = path.slice(0, -1); selected = 0; viewStart = 0; return; }
         ShellState.menuOpen = false;
     }
 
@@ -184,17 +219,30 @@ PanelWindow {
         const want = ShellState.menuCategory;
         if (want === "") return;
         const node = tree.find(n => n.children && n.title.toLowerCase() === want.toLowerCase());
-        if (node) path = [node];
+        if (node) {
+            path = [node];
+            direct = true;
+        }
     }
 
     onShownChanged: {
         if (shown) {
             if (!userMenu.running) userMenu.running = true;
             if (!snippets.running) snippets.running = true;
+            if (!clipProc.running) clipProc.running = true;
             pending = null;
+            direct = false;
+            mouseMode = false;
+            lastX = -1;
+            lastY = -1;
             path = [];
             enterRequestedCategory();
             clearQuery();
+            if (ShellState.menuQuery !== "") {
+                field.text = ShellState.menuQuery;
+                ShellState.menuQuery = "";
+            }
+            appear.restart();
             Qt.callLater(() => field.forceActiveFocus());
         }
     }
@@ -210,8 +258,22 @@ PanelWindow {
         id: snippets
         command: ["sh", "-c", 'PATH="$HOME/.local/bin:$PATH"; command -v dot-snippets >/dev/null 2>&1 && dot-snippets --menu || echo "[]"']
         stdout: StdioCollector {
-            onStreamFinished: root.generated = root.parse(this.text)
+            onStreamFinished: root.snipNodes = root.parse(this.text)
         }
+    }
+
+    // Clipboard history (cliphist), Super+V.
+    Process {
+        id: clipProc
+        command: ["sh", "-c", 'PATH="$HOME/.local/bin:$PATH"; command -v dot-clip >/dev/null 2>&1 && dot-clip --menu || echo "[]"']
+        stdout: StdioCollector {
+            onStreamFinished: root.clipNodes = root.parse(this.text)
+        }
+    }
+
+    // A category requested before its (asynchronously loaded) entries existed.
+    onGeneratedChanged: {
+        if (shown && path.length === 0 && ShellState.menuCategory !== "") enterRequestedCategory();
     }
 
     // Your own entries. Read each time the menu opens; a missing file is fine.
@@ -228,7 +290,8 @@ PanelWindow {
     Rectangle {
         anchors.fill: parent
         color: Colors.scrim
-        opacity: 0.35
+        opacity: root.shown ? 0.35 : 0
+        Behavior on opacity { NumberAnimation { duration: Style.animMs } }
 
         MouseArea {
             anchors.fill: parent
@@ -236,17 +299,24 @@ PanelWindow {
         }
     }
 
+    ParallelAnimation {
+        id: appear
+        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
+        NumberAnimation { target: card; property: "slide"; from: 14; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
+    }
+
     Rectangle {
         id: card
 
         readonly property int rowHeight: 40
 
-        width: Math.min(720, Math.max(480, parent.width * 0.4))
+        width: Math.min(parent.width - 2 * Style.gap, Math.min(720, Math.max(480, parent.width * 0.4)))
         height: content.implicitHeight + 24
+        property real slide: 0              // slides up into place while fading in
         x: Math.round((parent.width - width) / 2)
-        y: Math.round(parent.height * 0.2)
+        y: Math.round(parent.height * 0.2) + slide
         radius: Style.menuRadius
-        color: Colors.surface
+        color: Colors.alpha(Colors.surface, Style.panelOpacity)
         border.width: 1
         border.color: Colors.outlineVariant
 
@@ -265,7 +335,7 @@ PanelWindow {
                 visible: root.path.length > 0
                 text: "\uf104  " + root.path.map(p => p.title).join(" \u203a ")
                 color: Colors.surfaceVariantOn
-                font.pixelSize: 12
+                font.pixelSize: 13
                 Layout.leftMargin: 4
             }
 
@@ -287,27 +357,30 @@ PanelWindow {
                     color: Colors.surfaceContainer
                 }
 
-                onTextChanged: root.query = text
+                onTextChanged: {
+                    root.mouseMode = false;      // typing = keyboard mode
+                    root.query = text;
+                }
                 onAccepted: root.run(root.rows[root.selected])
 
-                Keys.onDownPressed: root.select(root.selected + 1)
-                Keys.onUpPressed: root.select(root.selected - 1)
+                Keys.onDownPressed: root.keySelect(root.selected + 1)
+                Keys.onUpPressed: root.keySelect(root.selected - 1)
                 Keys.onEscapePressed: {
                     if (root.pending !== null) root.pending = null;
-                    else ShellState.menuOpen = false;
+                    else root.back();
                 }
                 Keys.onPressed: event => {
                     if (event.key === Qt.Key_Backspace && text === "" && root.path.length > 0) {
                         root.back();
                         event.accepted = true;
                     } else if (event.key === Qt.Key_Tab) {
-                        root.select((root.selected + 1) % Math.max(1, root.rows.length));
+                        root.keySelect((root.selected + 1) % Math.max(1, root.rows.length));
                         event.accepted = true;
                     } else if (event.key === Qt.Key_PageDown) {
-                        root.select(root.selected + root.pageSize);
+                        root.keySelect(root.selected + root.pageSize);
                         event.accepted = true;
                     } else if (event.key === Qt.Key_PageUp) {
-                        root.select(root.selected - root.pageSize);
+                        root.keySelect(root.selected - root.pageSize);
                         event.accepted = true;
                     }
                 }
@@ -324,6 +397,7 @@ PanelWindow {
                     anchors.fill: parent
                     acceptedButtons: Qt.NoButton
                     onWheel: wheel => {
+                        root.mouseMode = true;
                         root.select(root.selected + (wheel.angleDelta.y > 0 ? -1 : 1));
                         wheel.accepted = true;
                     }
@@ -381,13 +455,13 @@ PanelWindow {
 
                                 Txt {
                                     readonly property bool asking: root.pending !== null && root.pending === item.modelData.node
-                                    text: asking ? "Press Enter again to confirm" : item.modelData.subtitle
+                                    text: asking ? "Enter again to confirm" : item.modelData.subtitle
                                     visible: text !== ""
                                     elide: Text.ElideRight
                                     Layout.maximumWidth: card.width * 0.45
                                     color: asking ? Colors.error : (item.active ? Colors.primaryContainerOn : Colors.surfaceVariantOn)
                                     font.bold: asking
-                                    font.pixelSize: 12
+                                    font.pixelSize: 13
                                 }
 
                                 Txt {
@@ -397,10 +471,26 @@ PanelWindow {
                                 }
                             }
 
+                            // Hover selects only after the pointer REALLY moves. `entered` and
+                            // synthetic hover events (menu opening, or the list scrolling under a
+                            // resting pointer) are ignored, so the keyboard keeps control until
+                            // you touch the mouse. A click always acts on the row you clicked.
                             MouseArea {
                                 anchors.fill: parent
                                 hoverEnabled: true
-                                onEntered: root.select(item.rowIndex)
+                                onPositionChanged: mouse => {
+                                    const p = item.mapToItem(null, mouse.x, mouse.y);
+                                    if (root.lastX < 0) {            // first sighting: just remember it
+                                        root.lastX = p.x;
+                                        root.lastY = p.y;
+                                        return;
+                                    }
+                                    if (Math.abs(p.x - root.lastX) + Math.abs(p.y - root.lastY) < 3) return;
+                                    root.lastX = p.x;
+                                    root.lastY = p.y;
+                                    root.mouseMode = true;
+                                    root.select(item.rowIndex);
+                                }
                                 onClicked: root.run(item.modelData)
                             }
                         }
@@ -412,7 +502,7 @@ PanelWindow {
                 visible: root.rows.length > root.pageSize
                 text: (root.selected + 1) + " / " + root.rows.length + "   (scroll, PageUp/PageDown)"
                 color: Colors.surfaceVariantOn
-                font.pixelSize: 11
+                font.pixelSize: 12
                 Layout.leftMargin: 6
             }
 

@@ -14,7 +14,9 @@ Singleton {
     readonly property int percent: Math.round(raw <= 1 ? raw * 100 : raw)
 
     readonly property bool charging: dev ? dev.state === UPowerDeviceState.Charging : false
-    readonly property bool low: present && !charging && percent <= 15
+    // UPower reports 0% for a moment after the shell (re)starts; that is "unknown", not "empty"
+    readonly property bool known: present && raw > 0
+    readonly property bool low: known && !charging && percent <= 15
 
     readonly property string glyph: {
         if (charging) return "\uf0e7";

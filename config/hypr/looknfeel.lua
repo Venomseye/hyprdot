@@ -1,7 +1,7 @@
 -- Look and feel: gaps, borders, rounding, blur, animations, layouts, misc.
 --
--- Visual standard: 4px inner / 8px outer gaps, 1px border, 10px rounding,
--- active border = matugen primary, blur passes = 3.
+-- Visual standard: 5px inner / 10px outer gaps, 2px border (ML4W uses 2px since 2.9.9.3),
+-- 10px rounding, active border = matugen primary, blur passes = 3.
 
 ------------------------
 ---- WALLPAPER COLOURS -
@@ -43,10 +43,10 @@ end
 
 hl.config({
 	general = {
-		gaps_in = 4,
-		gaps_out = 8,
+		gaps_in = 5,
+		gaps_out = 10,
 
-		border_size = 1,
+		border_size = 2,
 
 		col = {
 			active_border = rgba(palette.primary, "ff"),
@@ -58,7 +58,7 @@ hl.config({
 		-- See https://wiki.hypr.land/Configuring/Advanced-and-Cool/Tearing/ first
 		allow_tearing = false,
 
-		-- keep same outer gaps for single/maximized windows
+		-- floating windows get the same gap to the screen edge as tiled ones (-1 = use gaps_out)
 		float_gaps = -1,
 
 		layout = "dwindle",

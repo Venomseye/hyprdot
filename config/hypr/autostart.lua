@@ -20,7 +20,29 @@ do
 	end
 end
 
-hl.env("QT_QPA_PLATFORMTHEME", "qt5ct")
+-- nmtui, whiptail and other "newt" text UIs use fixed ANSI colour names (blue background, lightgray
+-- window, red title). The matugen terminal palette fills almost every ANSI slot with a light pastel,
+-- so those defaults came out pink-on-pink (title contrast 1.00:1). This palette only ever puts the
+-- dark slot (black = surface) behind the light ones, so it stays readable in dark AND light mode.
+-- (kitty.conf sets the same value, so it also applies to kitty windows opened before a restart.)
+hl.env("NEWT_COLORS",
+	"root=white,black roottext=lightgray,black window=white,black border=lightgray,black shadow=black,black title=blue,black button=blue,black actbutton=black,blue compactbutton=white,black checkbox=white,black actcheckbox=black,blue entry=black,lightgray disentry=gray,black label=white,black listbox=white,black actlistbox=white,black sellistbox=blue,black actsellistbox=black,blue textbox=white,black acttextbox=black,blue helpline=black,lightgray emptyscale=gray,black fullscale=blue,black")
+-- nmtui ALSO hard-codes a few colours of its own (plain labels, error labels, disabled buttons, text
+-- boxes: black on lightgray ...) that NEWT_COLORS cannot reach; it reads NMT_NEWT_COLORS for those.
+-- Without this they show as light-grey patches inside the dark window.
+hl.env("NMT_NEWT_COLORS", "plainLabel=white,black badLabel=red,black disabledButton=gray,black textboxWithBackground=black,lightgray")
+
+-- Qt apps take their colours from qt6ct/qt5ct (matugen writes the scheme; `dot-theme init`
+-- writes their config). Prefer qt6ct when its plugin is installed - most Qt apps are Qt6.
+do
+	local f = io.open("/usr/lib/qt6/plugins/platformthemes/libqt6ct.so", "r")
+	if f then
+		f:close()
+		hl.env("QT_QPA_PLATFORMTHEME", "qt6ct")
+	else
+		hl.env("QT_QPA_PLATFORMTHEME", "qt5ct")
+	end
+end
 -- Qt6 apps with qt6ct installed: hl.env("QT_QPA_PLATFORMTHEME", "qt6ct")
 
 -- Qt apps: Wayland first, X11 only as a fallback. (Quickshell itself is
@@ -82,14 +104,15 @@ hl.on("hyprland.start", function()
 	-- Quickshell's output goes to ~/.cache/quickshell.log (read it when the bar
 	-- is missing; `dot-doctor` prints it for you).
 	hl.exec_cmd(guarded("quickshell",
-		"pgrep -x quickshell >/dev/null || { mkdir -p \"$HOME/.cache\" && QT_QPA_PLATFORM=wayland quickshell >>\"$HOME/.cache/quickshell.log\" 2>&1; }"))
+		"pgrep -x quickshell >/dev/null || { pkill -x mako 2>/dev/null; pkill -x dunst 2>/dev/null; mkdir -p \"$HOME/.cache\" && QT_QPA_PLATFORM=wayland quickshell >>\"$HOME/.cache/quickshell.log\" 2>&1; }"))
 
 	-- Delayed startup tasks live in ~/.config/hooks/.d/post-boot.d/. They sleep
 	-- and poll, so run them detached rather than inline.
 	hl.exec_cmd("[ -x \"${XDG_CONFIG_HOME:-$HOME/.config}/hooks/run-hooks\" ] && \"${XDG_CONFIG_HOME:-$HOME/.config}/hooks/run-hooks\" post-boot")
 
 	hl.exec_cmd(guarded("hyprctl", "hyprctl setcursor Bibata-Modern-Ice 30"))
-	hl.exec_cmd(guarded("playerctld", "playerctld daemon"))
+	-- (no `playerctld daemon`: Quickshell's media service picks the active player itself, and the
+	-- daemon's proxy player only filled ~/.cache/quickshell.log with "NoActivePlayer" warnings)
 	hl.exec_cmd(guarded("wl-paste", "wl-paste --watch cliphist store"))
 	hl.exec_cmd(guarded("hypridle", "hypridle"))
 	hl.exec_cmd(guarded("blueman-applet", "blueman-applet"))

@@ -6,6 +6,7 @@ import qs.services
 // Battery. left = btop in a floating terminal, right = toggle the percentage.
 BarItem {
     visible: Battery.present
+    tooltip: "Battery " + Battery.percent + "%  " + (Battery.charging ? "(charging)" : "(on battery)") + "\nright-click: show/hide percentage"
 
     onClicked: mouse => {
         if (mouse.button === Qt.RightButton)
@@ -14,7 +15,7 @@ BarItem {
             Quickshell.execDetached(["sh", "-c", "command -v btop >/dev/null 2>&1 && exec kitty --title=btop -e btop"]);
     }
 
-    Txt {
+    BarIcon {
         text: Battery.glyph
         color: Battery.low ? Colors.error : Battery.charging ? Colors.primary : Colors.surfaceOn
     }

@@ -15,6 +15,8 @@ BarItem {
 
     PwObjectTracker { objects: [root.sink] }
 
+    tooltip: (root.sink?.description ?? "Audio") + "\nVolume " + Math.round(level * 100) + "%" + (muted ? "  (muted)" : "") + "\nscroll: volume   right-click: mute"
+
     onClicked: mouse => {
         if (!audio) return;
         if (mouse.button === Qt.RightButton) audio.muted = !audio.muted;
@@ -25,7 +27,7 @@ BarItem {
         audio.volume = Math.max(0, Math.min(1, level + (delta > 0 ? 0.05 : -0.05)));
     }
 
-    Txt {
+    BarIcon {
         text: root.muted ? "\uf026" : root.level < 0.34 ? "\uf027" : "\uf028"
         color: root.muted ? Colors.error : Colors.surfaceOn
     }

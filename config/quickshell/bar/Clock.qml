@@ -20,6 +20,8 @@ BarItem {
         precision: SystemClock.Minutes
     }
 
+    tooltip: Qt.formatDateTime(clock.date, "dddd, d MMMM yyyy") + "\nclick: calendar   right-click: change format"
+
     onClicked: mouse => {
         if (mouse.button === Qt.RightButton) {
             ShellState.clockFormat = (ShellState.clockFormat + 1) % formats.length;

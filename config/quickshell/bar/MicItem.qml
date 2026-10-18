@@ -16,6 +16,8 @@ BarItem {
 
     PwObjectTracker { objects: [root.source] }
 
+    tooltip: "Microphone " + (muted ? "muted" : "on") + "\nclick: mute/unmute   scroll: input volume"
+
     onClicked: mouse => {
         if (audio && mouse.button === Qt.LeftButton) audio.muted = !audio.muted;
     }
@@ -24,7 +26,7 @@ BarItem {
         audio.volume = Math.max(0, Math.min(1, audio.volume + (delta > 0 ? 0.05 : -0.05)));
     }
 
-    Txt {
+    BarIcon {
         text: root.muted ? "\uf131" : "\uf130"
         color: root.muted ? Colors.error : Colors.primary
     }

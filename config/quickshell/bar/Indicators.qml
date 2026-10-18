@@ -6,9 +6,10 @@ import qs.services
 // Do Not Disturb: left = turn it off.
 BarItem {
     visible: ShellState.dnd
+    tooltip: "Do Not Disturb is on\nclick: turn off"
     onClicked: ShellState.dnd = false
 
-    Txt {
+    BarIcon {
         text: "\uf1f6"
         color: Colors.tertiary
     }

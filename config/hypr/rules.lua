@@ -23,10 +23,10 @@ hl.permission("/usr/(bin|local/bin)/hyprlock", "screencopy", "allow")
 ---- WORKSPACE RULES ---
 ------------------------
 
-hl.workspace_rule({
-	workspace = "2",
-	layout = "scrolling",
-})
+-- Every workspace uses the default layout (dwindle, set in looknfeel.lua).
+-- Workspace 2 used to be forced to "scrolling"; that rule is gone on purpose.
+-- Per-workspace layouts can be added back here, e.g.:
+--   hl.workspace_rule({ workspace = "3", layout = "master" })
 
 ----------------------
 ---- WINDOW RULES ----
@@ -111,6 +111,29 @@ hl.window_rule({
 	size = "70% 60%",
 })
 
+-- File chooser (Upload / Open / Save from Firefox, Discord, ...). It comes from
+-- xdg-desktop-portal-gtk and used to open as tall as the parent window.
+-- The portal's window class is "xdg-desktop-portal-gtk" on older builds and
+-- "org.freedesktop.impl.portal.desktop.gtk" (or .gnome / .kde) on newer ones, so match all.
+-- Check yours with: sleep 5; dot-doctor   (then open the dialog) - see the "windows" section.
+hl.window_rule({
+	name = "float-file-chooser",
+	match = { class = "^(xdg-desktop-portal-gtk|org\\.freedesktop\\.impl\\.portal\\.desktop\\.(gtk|gnome|kde))$" },
+
+	float = true,
+	center = true,
+	size = "55% 70%",
+})
+
+-- Other small utility dialogs
+hl.window_rule({
+	name = "float-gtk-dialogs",
+	match = { class = "^(org.gnome.Loupe|org.gnome.Calculator|nm-connection-editor|blueman-assistant|org.gnome.FileRoller)$" },
+
+	float = true,
+	center = true,
+})
+
 hl.window_rule({
 	name = "move-hyprland-run",
 	match = { class = "hyprland-run" },
@@ -118,3 +141,16 @@ hl.window_rule({
 	move = "20 monitor_h-120",
 	float = true,
 })
+
+-- Blur behind Quickshell's panels (bar, menu, quick settings, notifications...). Every
+-- window sets a "qs-..." layer namespace for this. Wrapped in pcall so a wrong key can
+-- never take the rest of the config down; if panels stay flat, check `hyprctl configerrors`
+-- and your Hyprland version's layer-rule syntax.
+pcall(function()
+	hl.layer_rule({
+		name = "quickshell-blur",
+		match = { namespace = "^qs-.*" },
+		blur = true,
+		ignore_alpha = 0.3,
+	})
+end)

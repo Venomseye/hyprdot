@@ -5,6 +5,11 @@
     "subtitle": "Wallpaper and bar",
     "children": [
       {
+        "title": "Choose wallpaper...",
+        "glyph": "\uf03e",
+        "action": "qs ipc call shell toggle wallpapers"
+      },
+      {
         "title": "Next wallpaper",
         "glyph": "\uf061",
         "action": "dot-wallpaper next",
@@ -35,14 +40,40 @@
     "subtitle": "Screenshots",
     "children": [
       {
-        "title": "Screenshot: full screen",
+        "title": "Active display",
         "glyph": "\uf108",
-        "action": "mkdir -p ~/Pictures/Screenshots && f=~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png && grim - | tee \"$f\" | wl-copy && notify-send 'Screenshot saved' \"$(basename \"$f\")\""
+        "subtitle": "the screen you're on",
+        "action": "dot-screenshot screen --delay 0.4"
       },
       {
-        "title": "Screenshot: region + annotate",
+        "title": "Everything",
+        "glyph": "\uf0c9",
+        "subtitle": "all displays",
+        "action": "dot-screenshot all --delay 0.4"
+      },
+      {
+        "title": "Selection",
         "glyph": "\uf125",
-        "action": "mkdir -p ~/Pictures/Screenshots && grim -g \"$(slurp)\" - | satty --filename - --output-filename ~/Pictures/Screenshots/screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+        "subtitle": "drag a rectangle",
+        "action": "dot-screenshot region"
+      },
+      {
+        "title": "Window",
+        "glyph": "\uf2d0",
+        "subtitle": "the focused window",
+        "action": "dot-screenshot window --delay 0.4"
+      },
+      {
+        "title": "Selection + annotate",
+        "glyph": "\uf040",
+        "subtitle": "draw on it, then save",
+        "action": "dot-screenshot region --edit"
+      },
+      {
+        "title": "Active display + annotate",
+        "glyph": "\uf040",
+        "subtitle": "draw on it, then save",
+        "action": "dot-screenshot screen --edit --delay 0.4"
       }
     ]
   },
@@ -51,6 +82,11 @@
     "glyph": "\uf205",
     "subtitle": "Switches",
     "children": [
+      {
+        "title": "Quick settings",
+        "glyph": "\uf1de",
+        "action": "qs ipc call shell toggle quick"
+      },
       {
         "title": "Do not disturb",
         "glyph": "\uf1f6",
@@ -127,6 +163,11 @@
         "title": "Diagnose problems (dot-doctor)",
         "glyph": "\uf0f1",
         "action": "kitty --title=dot-update -e bash -c 'dot-doctor; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Fix dark mode in apps (dot-theme)",
+        "glyph": "\uf186",
+        "action": "kitty --title=dot-update -e bash -c 'dot-theme init; echo; dot-theme doctor; echo; read -rp \"Press Enter to close \" _'"
       }
     ]
   },

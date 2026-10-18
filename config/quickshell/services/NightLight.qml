@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.theme
+import qs.services
 
 // Night light via hyprsunset. "On" means a hyprsunset process is running;
 // toggling starts it at Style.nightLightKelvin or stops it (which restores
@@ -48,11 +49,18 @@ Singleton {
     }
 
     Timer {
-        interval: 3000
+        // fast while Quick settings is open, slow otherwise (every poll spawns a process)
+        interval: ShellState.quickOpen ? 3000 : 30000
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.refresh()
+    }
+
+    // opening the panel shows fresh values straight away
+    Connections {
+        target: ShellState
+        function onQuickOpenChanged() { if (ShellState.quickOpen) root.refresh(); }
     }
 
     Timer {

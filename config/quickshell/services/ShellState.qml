@@ -15,6 +15,9 @@ Singleton {
     // Transient
     property bool menuOpen: false
     property string menuCategory: ""     // open the menu inside this category (e.g. "System")
+    property string menuQuery: ""        // ...with this already typed (e.g. "=" for the calculator)
+    property bool quickOpen: false
+    property bool wallpapersOpen: false
     property bool historyOpen: false
 
     // Persisted
@@ -27,21 +30,47 @@ Singleton {
     property bool dirty: false
     readonly property string statePath: Style.stateHome + "/quickshell-dot/state.json"
 
-    function toggleMenu() {
-        menuCategory = "";
-        menuOpen = !menuOpen;
-        if (menuOpen) historyOpen = false;
+    // Only one overlay panel is open at a time; each toggle closes the others first.
+    function closePanels() {
+        menuOpen = false;
+        historyOpen = false;
+        quickOpen = false;
+        wallpapersOpen = false;
     }
 
-    function openMenu(category) {
+    function toggleMenu() {
+        const was = menuOpen;
+        closePanels();
+        menuCategory = "";
+        menuQuery = "";
+        menuOpen = !was;
+    }
+
+    // Open the menu inside a category and/or with a query already typed
+    // (openMenu("Clipboard"), openMenu("", "=") for the calculator).
+    function openMenu(category, query) {
+        closePanels();
         menuCategory = category || "";
-        historyOpen = false;
+        menuQuery = query || "";
         menuOpen = true;
     }
 
     function toggleHistory() {
-        historyOpen = !historyOpen;
-        if (historyOpen) menuOpen = false;
+        const was = historyOpen;
+        closePanels();
+        historyOpen = !was;
+    }
+
+    function toggleQuick() {
+        const was = quickOpen;
+        closePanels();
+        quickOpen = !was;
+    }
+
+    function toggleWallpapers() {
+        const was = wallpapersOpen;
+        closePanels();
+        wallpapersOpen = !was;
     }
 
     function parse(text) {

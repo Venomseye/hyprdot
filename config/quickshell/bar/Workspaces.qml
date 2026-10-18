@@ -1,11 +1,16 @@
 import QtQuick
+import Quickshell
 import Quickshell.Hyprland
 import qs.theme
+import qs.services
 
-// 1-5 always shown; higher ones only while they exist or are focused.
-// left = focus, scroll = previous/next.
+// 1-5 always shown; higher ones only while they exist or are active on this screen.
+// Each bar highlights the workspace that is active ON ITS OWN monitor (with two screens
+// they differ). left = go there, scroll = previous/next.
 Item {
     id: root
+
+    readonly property var mon: Hyprland.monitorFor(root.QsWindow.window ? root.QsWindow.window.screen : null)
 
     implicitWidth: row.implicitWidth
     implicitHeight: Style.barHeight
@@ -30,7 +35,7 @@ Item {
                     root.scrollAcc = 0;
                 }
             }
-            if (step !== 0) Hyprland.dispatch("workspace " + (step < 0 ? "e-1" : "e+1"));
+            if (step !== 0) Compositor.focusWorkspace(step < 0 ? "e-1" : "e+1");
             wheel.accepted = true;
         }
     }
@@ -49,11 +54,12 @@ Item {
                 readonly property int wsId: index + 1
                 readonly property var info: Hyprland.workspaces.values.find(w => w.id === ws.wsId)
                 readonly property bool occupied: info !== undefined
-                readonly property bool focused: Hyprland.focusedWorkspace?.id === ws.wsId
+                readonly property bool shownHere: root.mon?.activeWorkspace?.id === ws.wsId
+                readonly property bool focused: shownHere && (root.mon?.focused ?? false)
                 readonly property bool urgent: info?.urgent ?? false
 
-                visible: wsId <= 5 || occupied || focused
-                width: 22
+                visible: wsId <= 5 || occupied || shownHere
+                width: 26
                 height: Style.barHeight
 
                 Txt {
@@ -61,25 +67,26 @@ Item {
                     text: ws.wsId
                     font.bold: ws.focused
                     color: ws.urgent ? Colors.error
-                         : ws.focused ? Colors.primary
+                         : ws.shownHere ? Colors.primary
                          : ws.occupied ? Colors.surfaceOn
                          : Colors.outline
                 }
 
                 Rectangle {
-                    visible: ws.focused
+                    visible: ws.shownHere
+                    opacity: ws.focused ? 1 : 0.45
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 2
-                    width: 12
-                    height: 2
+                    width: 14
+                    height: 3
                     radius: 1
                     color: Colors.primary
                 }
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: Hyprland.dispatch("workspace " + ws.wsId)
+                    onClicked: Compositor.focusWorkspace(ws.wsId)
                 }
             }
         }

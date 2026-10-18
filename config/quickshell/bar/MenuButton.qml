@@ -5,6 +5,7 @@ import qs.services
 
 // left = Omarchy-style menu / launcher, right = terminal
 BarItem {
+    tooltip: "Menu   (Super+Space)\nright-click: terminal"
     onClicked: mouse => {
         if (mouse.button === Qt.RightButton)
             Quickshell.execDetached(["sh", "-c", "command -v kitty >/dev/null 2>&1 && exec kitty; command -v ghostty >/dev/null 2>&1 && exec ghostty"]);
@@ -15,6 +16,6 @@ BarItem {
     Txt {
         text: "\uf303"
         color: Colors.primary
-        font.pixelSize: 16
+        font.pixelSize: 18
     }
 }

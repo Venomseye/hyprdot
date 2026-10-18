@@ -46,9 +46,6 @@ hl.gesture({
 	action = "workspace",
 })
 
--- Example per-device config
+-- Per-device overrides go here (names from `hyprctl devices`), e.g.:
+--   hl.device({ name = "logitech-g502", sensitivity = -0.3 })
 -- See https://wiki.hypr.land/Configuring/Advanced-and-Cool/Devices/
-hl.device({
-	name = "epic-mouse-v1",
-	sensitivity = -0.5,
-})

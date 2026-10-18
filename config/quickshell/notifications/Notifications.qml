@@ -106,6 +106,7 @@ Scope {
         WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
         onVisibleChanged: if (visible) {
+            appear.restart();
             idle.restart();
             Qt.callLater(() => keys.forceActiveFocus());
         }
@@ -129,17 +130,24 @@ Scope {
             Keys.onEscapePressed: ShellState.historyOpen = false
         }
 
+        ParallelAnimation {
+            id: appear
+            NumberAnimation { target: panel; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
+            NumberAnimation { target: panel; property: "slide"; from: -8; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
+        }
+
         Rectangle {
             id: panel
+            property real slide: 0
             anchors.top: parent.top
             anchors.right: parent.right
-            anchors.topMargin: Style.gap
+            anchors.topMargin: Style.gap + slide
             anchors.rightMargin: Style.gap
             width: 400
             implicitHeight: list.implicitHeight + 24
             height: implicitHeight
             radius: Style.radius
-            color: Colors.surfaceContainer
+            color: Colors.alpha(Colors.surfaceContainer, Style.panelOpacity)
             border.width: 1
             border.color: Colors.outlineVariant
 
@@ -178,7 +186,7 @@ Scope {
                             width: parent.width
                             text: Qt.formatDateTime(parent.modelData.time, "HH:mm") + "  " + parent.modelData.appName
                             color: Colors.surfaceVariantOn
-                            font.pixelSize: 11
+                            font.pixelSize: 12
                             elide: Text.ElideRight
                         }
                         Txt {
