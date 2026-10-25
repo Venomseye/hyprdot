@@ -416,11 +416,20 @@ PanelWindow {
                             required property int index
                             readonly property int rowIndex: root.viewStart + index
                             readonly property bool active: rowIndex === root.selected
+                            // This row is waiting for its second Enter/click. Compared by TITLE, not object identity:
+                            // a model built from a JS array hands each row a COPY of the object, so
+                            // `root.pending === modelData.node` is never true - which is why the "confirm" hint
+                            // never appeared although the second press was (correctly) required.
+                            readonly property bool confirming: root.pending !== null && !!modelData.node
+                                && modelData.node.confirm === true && root.pending.title === modelData.title
 
                             width: parent.width
                             height: card.rowHeight
                             radius: 8
-                            color: active ? Colors.primaryContainer : "transparent"
+                            color: confirming ? Colors.alpha(Colors.error, 0.28) : (active ? Colors.primaryContainer : "transparent")
+                            border.width: confirming ? 1 : 0
+                            border.color: Colors.error
+                            Behavior on color { ColorAnimation { duration: 90 } }
 
                             RowLayout {
                                 anchors.fill: parent
@@ -450,12 +459,13 @@ PanelWindow {
                                     Layout.fillWidth: true
                                     text: item.modelData.title
                                     elide: Text.ElideRight
-                                    color: item.active ? Colors.primaryContainerOn : Colors.surfaceOn
+                                    font.bold: item.confirming
+                                    color: item.confirming ? Colors.error : (item.active ? Colors.primaryContainerOn : Colors.surfaceOn)
                                 }
 
                                 Txt {
-                                    readonly property bool asking: root.pending !== null && root.pending === item.modelData.node
-                                    text: asking ? "Enter again to confirm" : item.modelData.subtitle
+                                    readonly property bool asking: item.confirming
+                                    text: asking ? "Press again to confirm" : item.modelData.subtitle
                                     visible: text !== ""
                                     elide: Text.ElideRight
                                     Layout.maximumWidth: card.width * 0.45

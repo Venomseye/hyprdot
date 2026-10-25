@@ -40,7 +40,7 @@ Singleton {
 
     Timer {
         // fast while Quick settings is open, slow otherwise (every poll spawns a process)
-        interval: ShellState.quickOpen ? 3000 : 30000
+        interval: ShellState.quickOpen ? 3000 : 90000
         running: true
         repeat: true
         triggeredOnStart: true

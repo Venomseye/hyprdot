@@ -45,6 +45,10 @@ do
 end
 -- Qt6 apps with qt6ct installed: hl.env("QT_QPA_PLATFORMTHEME", "qt6ct")
 
+-- Qt prints "Trying to disable <surface> but 0x0 is focused" (qt.qpa.wayland.textinput) each time a
+-- Quickshell popup closes. Harmless, but it floods ~/.cache/quickshell.log; silence that category only.
+hl.env("QT_LOGGING_RULES", "qt.qpa.wayland.textinput.warning=false")
+
 -- Qt apps: Wayland first, X11 only as a fallback. (Quickshell itself is
 -- started below with a strict "wayland" so a missing qt6-wayland shows up as
 -- an error in ~/.cache/quickshell.log instead of a silent fall-back to X11.)
@@ -103,8 +107,11 @@ hl.on("hyprland.start", function()
 	hl.exec_cmd(guarded("wpaperd", "wpaperd -d"))
 	-- Quickshell's output goes to ~/.cache/quickshell.log (read it when the bar
 	-- is missing; `dot-doctor` prints it for you).
+	-- `dot-reload boot` checks the QML first, starts Quickshell, and if the config does not load
+	-- falls back to the last copy that did (see `dot-reload --help`). It also trims the log. Without
+	-- dot-reload (a bare checkout) the old direct start is used.
 	hl.exec_cmd(guarded("quickshell",
-		"pgrep -x quickshell >/dev/null || { pkill -x mako 2>/dev/null; pkill -x dunst 2>/dev/null; mkdir -p \"$HOME/.cache\" && QT_QPA_PLATFORM=wayland quickshell >>\"$HOME/.cache/quickshell.log\" 2>&1; }"))
+		"if command -v dot-reload >/dev/null 2>&1; then dot-reload boot; else pgrep -x quickshell >/dev/null || { pkill -x mako 2>/dev/null; pkill -x dunst 2>/dev/null; mkdir -p \"$HOME/.cache\" && QT_QPA_PLATFORM=wayland quickshell >>\"$HOME/.cache/quickshell.log\" 2>&1; }; fi"))
 
 	-- Delayed startup tasks live in ~/.config/hooks/.d/post-boot.d/. They sleep
 	-- and poll, so run them detached rather than inline.

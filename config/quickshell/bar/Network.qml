@@ -7,7 +7,7 @@ import qs.services
 // left = quick settings (Wi-Fi list there), right = nmtui in a floating terminal.
 BarItem {
     visible: NetState.available
-    tooltip: NetState.kind === "none" ? NetState.label : "Connected: " + NetState.label
+    tooltip: (NetState.kind === "none" ? NetState.label : "Connected: " + NetState.label) + "\nclick: quick settings   right-click: nmtui"
 
     onClicked: mouse => {
         if (mouse.button === Qt.RightButton)

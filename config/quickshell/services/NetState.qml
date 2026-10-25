@@ -12,6 +12,8 @@ Singleton {
     id: root
 
     property bool available: true
+    property bool probed: false            // the first poll has finished (so we know whether nmcli exists)
+    property bool hasWifi: false           // an actual Wi-Fi adapter exists (not just the nmcli tool)
     property string kind: "none"          // wifi | ethernet | none
     property string ssid: ""
     property bool wifiEnabled: true
@@ -63,17 +65,20 @@ Singleton {
         stdout: StdioCollector {
             onStreamFinished: {
                 const lines = this.text.split("\n");
+                root.probed = true;
                 if (lines[0].trim() === "missing") { root.available = false; return; }
                 root.available = true;
-                let kind = "none", name = "";
+                let kind = "none", name = "", wifiDevice = false;
                 for (const line of lines) {
                     if (line.startsWith("radio:")) { root.wifiEnabled = line.trim() === "radio:enabled"; continue; }
                     const f = Terse.split(line);
+                    if (f.length >= 1 && f[0] === "wifi") wifiDevice = true;
                     if (f.length >= 2 && f[1] === "connected") {
                         if (f[0] === "ethernet") { kind = "ethernet"; name = f[2] ?? ""; break; }
                         if (f[0] === "wifi" && kind !== "ethernet") { kind = "wifi"; name = f[2] ?? ""; }
                     }
                 }
+                root.hasWifi = wifiDevice;
                 root.kind = kind;
                 root.ssid = name;
                 if (root.connecting !== "" && name === root.connecting) root.connecting = "";
@@ -105,9 +110,38 @@ Singleton {
         }
     }
 
+    // Change notifications: `nmcli monitor` prints a line whenever NetworkManager's state changes
+    // (device up/down, connection activated, Wi-Fi radio toggled ...). Any line triggers a refresh a
+    // moment later, so the bar follows a change at once instead of up to 20 s late, and the poll
+    // below is only a safety net (60 s: if nmcli monitor ever fails to deliver, the bar is at most a minute late). If nmcli exits (NetworkManager restarted) it is started again
+    // after a delay that grows to 5 minutes, so a machine without NetworkManager running costs
+    // almost nothing.
+    property int retryMs: 10000
+    property bool monitorOn: true
+    Process {
+        id: monitor
+        running: root.available && root.probed && root.monitorOn
+        command: ["nmcli", "monitor"]
+        stdout: SplitParser {
+            onRead: data => {
+                root.retryMs = 10000;
+                debounce.restart();
+            }
+        }
+        onExited: {
+            root.monitorOn = false;
+            restartMonitor.interval = root.retryMs;
+            root.retryMs = Math.min(root.retryMs * 3, 300000);
+            restartMonitor.start();
+        }
+    }
+    Timer { id: debounce; interval: 400; onTriggered: root.refresh() }
+    Timer { id: restartMonitor; onTriggered: root.monitorOn = true }
+
     Timer {
-        // fast while Quick settings is open, slow otherwise (every poll spawns a process)
-        interval: ShellState.quickOpen ? 5000 : 20000
+        // Safety net now that nmcli monitor pushes changes: fast while Quick settings is open
+        // (the Wi-Fi list lives there), very slow otherwise.
+        interval: ShellState.quickOpen ? 10000 : 60000
         running: true
         repeat: true
         triggeredOnStart: true

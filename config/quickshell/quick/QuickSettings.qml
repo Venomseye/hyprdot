@@ -171,12 +171,27 @@ PanelWindow {
                     Tile {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
-                        visible: NetState.available
+                        visible: NetState.available && NetState.hasWifi
                         glyph: "\uf1eb"
                         label: "Wi-Fi"
                         sub: NetState.label
                         active: NetState.wifiEnabled
                         onClicked: NetState.toggleWifi()
+                    }
+                    // No Wi-Fi adapter (a desktop, a VM): the Wi-Fi tile is hidden, so without this there
+                    // would be no network entry here at all. Shows the wired connection; click opens nmtui.
+                    Tile {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        visible: NetState.available && !NetState.hasWifi
+                        glyph: "\uf0ac"
+                        label: NetState.kind === "ethernet" ? "Ethernet" : "Network"
+                        sub: NetState.kind === "none" ? "Not connected" : (NetState.ssid !== "" ? NetState.ssid : NetState.label)
+                        active: NetState.kind !== "none"
+                        onClicked: {
+                            ShellState.quickOpen = false;
+                            Run.sh("command -v nmtui >/dev/null 2>&1 && exec kitty --title=nmtui -e nmtui");
+                        }
                     }
                     Tile {
                         Layout.fillWidth: true
@@ -271,7 +286,7 @@ PanelWindow {
 
                     SectionHeader {
                         Layout.fillWidth: true
-                        visible: NetState.available
+                        visible: NetState.available && NetState.hasWifi
                         label: "Wi-Fi networks"
                         sub: NetState.kind === "wifi" ? NetState.ssid : ""
                         expanded: root.section === "wifi"
@@ -279,7 +294,7 @@ PanelWindow {
                     }
                     ColumnLayout {
                         Layout.fillWidth: true
-                        visible: root.section === "wifi" && NetState.available
+                        visible: root.section === "wifi" && NetState.available && NetState.hasWifi
                         spacing: 4
 
                         ScrollList {

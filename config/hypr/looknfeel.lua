@@ -91,6 +91,55 @@ hl.config({
 	},
 })
 
+----------------------------------
+---- LOW-EFFECTS (VMs, slow GPUs) ---
+----------------------------------
+
+-- Blur, shadows and animations are drawn by the GPU. Without one (a VM with a virtio display and no
+-- 3D acceleration, where everything is software-rendered) they are done on the CPU: a doctor report
+-- from such a VM showed Hyprland alone using 129% CPU while idle. So they are switched off there.
+--   automatic    when systemd-detect-virt says this is a virtual machine
+--   force on     touch ~/.config/hypr/low-effects
+--   force off    touch ~/.config/hypr/full-effects        (full effects even in a VM)
+-- Takes effect on `dot-reload hypr` / `hyprctl reload`. Check: hyprctl getoption decoration:blur:enabled
+local function low_effects()
+	local base = os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")
+	local function exists(name)
+		local f = io.open(base .. "/hypr/" .. name, "r")
+		if f then
+			f:close()
+			return true
+		end
+		return false
+	end
+	if exists("full-effects") then
+		return false
+	end
+	if exists("low-effects") or os.getenv("DOT_LOW_EFFECTS") == "1" then
+		return true
+	end
+	local ok, virt = pcall(function()
+		local p = io.popen("systemd-detect-virt --vm 2>/dev/null")
+		if not p then
+			return ""
+		end
+		local out = p:read("*l") or ""
+		p:close()
+		return out
+	end)
+	return ok and virt ~= "" and virt ~= "none"
+end
+
+if low_effects() then
+	hl.config({
+		decoration = {
+			blur = { enabled = false },
+			shadow = { enabled = false },
+		},
+		animations = { enabled = false },
+	})
+end
+
 ----------------------
 ---- ANIMATIONS ------
 ----------------------
