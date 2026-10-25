@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+#
+# Check the dotfiles for mistakes that would break your session, before they do.
+#
+#   dot-check [options]
+#
+#   (default)       check the repo this script lives in (what CI runs): shell scripts, Lua,
+#                   JSON, QML
+#   --live          check what is INSTALLED in ~/.config (quickshell QML, hypr Lua, menu JSON);
+#                   this is what `dot-reload shell` runs before it stops a working shell
+#   --qml           only the QML checks      (also --shell, --lua, --json)
+#   --quiet         print only problems
+#   --load          EXPERIMENTAL: start Quickshell offscreen for a few seconds and see whether it
+#                   reports "Configuration Loaded". Untested - it may not work with layer-shell
+#                   windows - and never part of the default run.
+#   -h, --help      this message
+#
+# Exit status: 0 = nothing wrong (warnings are fine), 1 = errors found, 2 = bad usage.
+#
+# What each check can and cannot catch:
+#   shell   `bash -n` (syntax) and, when installed, `shellcheck -S error`.
+#   lua     `luac -p` / `luajit -bl` (syntax only). Skipped, with a note, if neither is installed.
+#   json    menu.json / menu.user.json must parse.
+#   qml     tools/qmlcheck.py: brackets, "Expected token ':'" style mistakes, duplicate ids,
+#           on<Capital> property names, imports of missing directories, Colors.foo / Style.foo
+#           that do not exist, misspelt types. Needs python3. If qmllint is installed it is also
+#           run, and its syntax-looking messages are shown as warnings (advisory: not calibrated).
+#           Neither is a full QML engine: Quickshell has the last word.
+
+set -uo pipefail
+
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+# Where tools/ and the sources live: a checkout (run from the repo, or a --link install), else
+# the copy a normal install leaves in ~/.local/share/hyprdot. DOT_HOME overrides both.
+repo="${DOT_HOME:-}"
+if [ -z "$repo" ]; then
+    repo="$(dirname "$(dirname "$self")")"
+    [ -f "$repo/tools/qmlcheck.py" ] || repo="${XDG_DATA_HOME:-$HOME/.local/share}/hyprdot"
+fi
+config="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+MODE=repo
+QUIET=false
+LOAD=false
+only=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --live)  MODE=live ;;
+        --qml|--shell|--lua|--json) only+=("${arg#--}") ;;
+        --quiet|-q) QUIET=true ;;
+        --load)  LOAD=true ;;
+        -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "$self"; exit 0 ;;
+        *) echo "dot-check: unknown option: $arg (see --help)" >&2; exit 2 ;;
+    esac
+done
+
+want() {   # want <check>: true when no --only flag was given, or this one was
+    [ "${#only[@]}" -eq 0 ] && return 0
+    local o
+    for o in "${only[@]}"; do [ "$o" = "$1" ] && return 0; done
+    return 1
+}
+
+errors=0
+warns=0
+say()  { $QUIET || printf '%s\n' "$*"; }
+bad()  { printf 'error: %s\n' "$*" >&2; errors=$((errors + 1)); }
+note() { printf 'warn:  %s\n' "$*" >&2; warns=$((warns + 1)); }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# a normal (copy) install has no repo to check - only what is installed
+if [ "$MODE" = repo ] && [ ! -d "$repo/config/quickshell" ]; then
+    MODE=live
+    say "(no repo checkout found next to this script - checking the installed config instead)"
+fi
+if [ "$MODE" = live ]; then
+    qml_dir="$config/quickshell"
+    hypr_dir="$config/hypr"
+else
+    qml_dir="$repo/config/quickshell"
+    hypr_dir="$repo/config/hypr"
+fi
+
+# ---------------------------------------------------------------- shell scripts
+check_shell() {
+    [ "$MODE" = live ] && return 0
+    say "== shell scripts"
+    local f n=0 out
+    while IFS= read -r -d '' f; do
+        n=$((n + 1))
+        if ! out="$(bash -n "$f" 2>&1)"; then bad "${f#"$repo"/}: $out"; fi
+    done < <({
+        find "$repo/bin" -maxdepth 1 -type f -print0
+        find "$repo/config" -type f \( -name '*.sh' -o -name run-hooks \) -print0
+        printf '%s\0' "$repo/install.sh"
+    })
+    say "   $n file(s) pass 'bash -n'"
+    if have shellcheck; then
+        # -S error: only real mistakes. Style findings are not worth failing a reload over.
+        if out="$(cd "$repo" && shellcheck -S error -x bin/* install.sh config/wpaperd/matugen-hook.sh config/hooks/run-hooks config/hooks/.d/*/*.sh 2>&1)"; then
+            say "   shellcheck: clean"
+        else
+            note "shellcheck found problems:"$'\n'"$out"
+        fi
+    else
+        say "   shellcheck not installed - skipped"
+    fi
+}
+
+# ---------------------------------------------------------------- hyprlock variants in sync
+check_hyprlock() {
+    [ "$MODE" = live ] && return 0
+    local a="$repo/config/hypr/hyprlock.conf" b="$repo/config/hypr/hyprlock-low.conf"
+    [ -f "$a" ] && [ -f "$b" ] || return 0
+    have python3 || return 0
+    say "== hyprlock variants"
+    if python3 - "$a" "$b" <<'PY'
+import re, sys
+def rest(path):
+    s = open(path).read()
+    s = re.sub(r"\A#[^\n]*\n", "", s)                         # first comment line differs by design
+    s = re.sub(r"(?:# `path = screenshot`.*?\n|# LIGHT variant.*?\n(?:#[^\n]*\n)*)?background \{.*?\n\}\n", "", s, count=1, flags=re.S)
+    return s
+sys.exit(0 if rest(sys.argv[1]) == rest(sys.argv[2]) else 1)
+PY
+    then say "   hyprlock.conf and hyprlock-low.conf agree outside the background block"
+    else bad "config/hypr/hyprlock-low.conf has drifted from hyprlock.conf (only the background block may differ)"; fi
+}
+
+# ---------------------------------------------------------------- Lua
+check_lua() {
+    say "== Lua (Hyprland config)"
+    local checker="" c f out n=0
+    for c in luac luac5.4 luac5.3 luac5.1 luajit; do
+        if have "$c"; then checker="$c"; break; fi
+    done
+    if [ -z "$checker" ]; then
+        # no real Lua: fall back to a best-effort lexer (strings, brackets, end-balance)
+        if have python3 && [ -f "$repo/tools/luasanity.py" ]; then
+            local f2 n2=0
+            for f2 in "$hypr_dir"/*.lua; do
+                [ -f "$f2" ] || continue
+                n2=$((n2 + 1))
+                out="$(python3 "$repo/tools/luasanity.py" "$f2" 2>&1)" || bad "$out"
+            done
+            say "   $n2 file(s) checked with the built-in sanity check (install lua or luajit for a real syntax check)"
+        else
+            say "   no luac/luajit/python3 installed - skipped"
+        fi
+        return 0
+    fi
+    for f in "$hypr_dir"/*.lua; do
+        [ -f "$f" ] || continue
+        n=$((n + 1))
+        if [ "$checker" = luajit ]; then
+            out="$(luajit -bl "$f" 2>&1 >/dev/null)" || bad "${f#"$HOME"/}: $out"
+        else
+            out="$("$checker" -p "$f" 2>&1)" || bad "${f#"$HOME"/}: $out"
+        fi
+    done
+    say "   $n file(s) checked with $checker"
+}
+
+# ---------------------------------------------------------------- JSON
+check_json() {
+    say "== JSON"
+    local files=() f n=0 out
+    if [ "$MODE" = live ]; then
+        [ -f "$qml_dir/menu/menu.json" ] && files+=("$qml_dir/menu/menu.json")
+        [ -f "$qml_dir/menu.user.json" ] && files+=("$qml_dir/menu.user.json")
+    else
+        while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$repo/config" -name '*.json' -print0)
+    fi
+    for f in "${files[@]}"; do
+        n=$((n + 1))
+        if have python3; then
+            out="$(python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>&1)" || bad "${f#"$HOME"/}: ${out##*$'\n'}"
+        elif have jq; then
+            out="$(jq empty "$f" 2>&1)" || bad "${f#"$HOME"/}: $out"
+        else
+            say "   neither python3 nor jq installed - skipped"; return 0
+        fi
+    done
+    say "   $n file(s) parse"
+}
+
+# ---------------------------------------------------------------- QML
+find_qmllint() {
+    local c
+    for c in qmllint6 qmllint-qt6 qmllint /usr/lib/qt6/bin/qmllint; do
+        if have "$c" || [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+    done
+    return 1
+}
+
+check_qml() {
+    say "== QML ($qml_dir)"
+    if [ ! -d "$qml_dir" ]; then
+        bad "no such directory: $qml_dir"
+        return 0
+    fi
+    local out rc ql f
+    if have python3 && [ -f "$repo/tools/qmlcheck.py" ]; then
+        out="$(python3 "$repo/tools/qmlcheck.py" "$qml_dir" 2>&1)"; rc=$?
+        # every line is "file:line:col: error|warn: message", except the final summary
+        while IFS= read -r line; do
+            case "$line" in
+                qml:*) say "   $line" ;;
+                *": error:"*) bad "$line" ;;
+                *": warn:"*) note "$line" ;;
+                '') ;;
+                *) printf '%s\n' "$line" >&2 ;;
+            esac
+        done <<<"$out"
+    else
+        say "   python3 (or tools/qmlcheck.py) not found - structural check skipped"
+    fi
+
+    if ql="$(find_qmllint)"; then
+        local syntax=0
+        while IFS= read -r -d '' f; do
+            out="$("$ql" "$f" 2>&1 || true)"
+            # only parse-level complaints; unresolved qs.* / Quickshell imports are expected here
+            if printf '%s\n' "$out" | grep -qiE '^(error|warning):.*(expected|unexpected|syntax|unterminated)'; then
+                note "qmllint (advisory): ${f#"$qml_dir"/}: $(printf '%s\n' "$out" | grep -iE '(expected|unexpected|syntax|unterminated)' | head -n 1)"
+                syntax=$((syntax + 1))
+            fi
+        done < <(find "$qml_dir" -name '*.qml' -print0)
+        say "   qmllint ($ql): $syntax file(s) with syntax-looking messages"
+    else
+        say "   qmllint not installed - skipped (it ships with qt6-declarative)"
+    fi
+}
+
+# ---------------------------------------------------------------- experimental load test
+check_load() {
+    say "== load test (EXPERIMENTAL)"
+    local qs log
+    qs="$(command -v quickshell || true)"
+    [ -n "$qs" ] || { note "quickshell not installed - load test skipped"; return 0; }
+    log="$(mktemp)"
+    # offscreen platform + a short timeout; a hang or a crash is reported, not fatal
+    QT_QPA_PLATFORM=offscreen timeout 8 "$qs" -p "$qml_dir" >"$log" 2>&1 </dev/null
+    if grep -q 'Failed to load configuration' "$log"; then
+        bad "Quickshell could not load $qml_dir:"$'\n'"$(grep -iE 'error|caused by|failed' "$log" | head -n 8)"
+    elif grep -q 'Configuration Loaded' "$log"; then
+        say "   Quickshell loaded the configuration"
+    else
+        note "load test inconclusive (no 'Configuration Loaded' within 8 s; offscreen may not support layer-shell) - last lines:"$'\n'"$(tail -n 5 "$log")"
+    fi
+    rm -f "$log"
+}
+
+# ---------------------------------------------------------------- run
+want shell && check_shell
+want lua   && check_hyprlock
+want lua   && check_lua
+want json  && check_json
+want qml   && check_qml
+$LOAD && check_load
+
+if [ "$errors" -gt 0 ]; then
+    printf '\ndot-check: %d error(s), %d warning(s)\n' "$errors" "$warns" >&2
+    exit 1
+fi
+$QUIET || printf '\ndot-check: ok (%d warning(s))\n' "$warns"
+exit 0

@@ -39,16 +39,41 @@ report() {
     sec "which copy of the dotfiles is installed"
     self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
     repo="$(dirname "$(dirname "$self")")"
+    # a normal install COPIES the scripts, so the checkout is gone: the version lives in the share dir
+    [ -f "$repo/VERSION" ] || repo="${XDG_DATA_HOME:-$HOME/.local/share}/hyprdot"
     if [ -f "$repo/VERSION" ]; then
         echo "  repo: $repo   version: $(head -n 1 "$repo/VERSION")"
     else
         echo "  repo: $repo   version: unknown (no VERSION file - an older snapshot)"
+    fi
+    case "$repo/" in
+        "$HOME"/Downloads/*|/tmp/*|/var/tmp/*|"$HOME"/.cache/*|/run/*|/dev/shm/*)
+            echo "  WARNING: the repo is in a folder that gets cleaned up or moved. Every link in ~/.config and"
+            echo "           ~/.local/bin points into it. Move it: mkdir -p ~/.dotfiles && mv \"$repo\" ~/.dotfiles/hyprdot"
+            echo "           then run:  bash ~/.dotfiles/hyprdot/install.sh"
+            issue "the dotfiles repo ($repo) is in a folder that gets cleaned up; move it somewhere permanent and re-run install.sh"
+            ;;
+    esac
+    if [ -L "${BASH_SOURCE[0]}" ]; then
+        echo "  NOTE: this script is a symlink into $repo (an old --link install). Everything in ~/.config and"
+        echo "        ~/.local/bin depends on that folder. To switch to independent copies: bash $repo/install.sh"
     fi
     qsd="$(readlink -f "$config/quickshell" 2>/dev/null || true)"
     echo "  ~/.config/quickshell -> ${qsd:-<missing>}"
     for b in dot-theme dot-screenshot dot-clip dot-snippets; do
         [ -e "$repo/bin/$b" ] || echo "  note: $repo/bin/$b does not exist in this copy"
     done
+
+    # ------------------------------------------------------------------
+    sec "config check (dot-check --live: installed QML, Hyprland Lua, menu JSON)"
+    dc="$(command -v dot-check || true)"; [ -n "$dc" ] || dc="$repo/bin/dot-check"
+    if [ -x "$dc" ]; then
+        chk="$("$dc" --live 2>&1)"; chk_rc=$?
+        printf '%s\n' "$chk" | sed 's/^/  /'
+        [ "$chk_rc" -eq 0 ] || issue "dot-check found errors in the installed config - see the 'config check' section; Quickshell/Hyprland may fail to load it"
+    else
+        echo "  (dot-check not found in this copy of the dotfiles)"
+    fi
 
     # ------------------------------------------------------------------
     sec "session"
@@ -217,6 +242,65 @@ report() {
         echo "  (a file dialog's class only shows while it is open: run  sleep 5; dot-doctor  and open the dialog)"
     else
         echo "  (needs hyprctl and jq inside a Hyprland session - skipped)"
+    fi
+
+    sec "power & suspend (a suspended machine should draw almost nothing)"
+    echo "  suspend modes: $(cat /sys/power/mem_sleep 2>/dev/null || echo unknown)   <- the one in [brackets] is used; s2idle (\"modern standby\") drains far more than deep"
+    for k in success fail last_failed_dev last_hw_sleep total_hw_sleep max_hw_sleep; do
+        [ -r "/sys/power/suspend_stats/$k" ] && printf '  suspend_stats/%s = %s\n' "$k" "$(cat "/sys/power/suspend_stats/$k")"
+    done
+    grep -hsE '^[[:space:]]*Handle(LidSwitch|LidSwitchExternalPower|LidSwitchDocked|PowerKey|SuspendKey)=' /etc/systemd/logind.conf /etc/systemd/logind.conf.d/*.conf 2>/dev/null | sed 's/^/  logind: /'
+    for b in /sys/class/power_supply/BAT*; do
+        [ -r "$b/capacity" ] || continue
+        pw="$(cat "$b/power_now" 2>/dev/null || echo 0)"
+        printf '  %s: %s%% %s, drawing %s W right now\n' "$(basename "$b")" "$(cat "$b/capacity")" "$(cat "$b/status" 2>/dev/null)" "$(awk -v p="$pw" 'BEGIN { printf "%.1f", p / 1000000 }')"
+    done
+    for c in /sys/class/drm/card[0-9]; do
+        d="$c/device"
+        [ -d "$d" ] || continue
+        printf '  %s: pci %s:%s driver=%s runtime_pm=%s power_state=%s\n' "$(basename "$c")" "$(cat "$d/vendor" 2>/dev/null)" "$(cat "$d/device" 2>/dev/null)" \
+            "$(basename "$(readlink -f "$d/driver" 2>/dev/null)")" "$(cat "$d/power/runtime_status" 2>/dev/null || echo ?)" "$(cat "$d/power_state" 2>/dev/null || echo ?)"
+    done
+    if have systemd-inhibit; then
+        echo "  inhibitors (things that can stop idle/sleep):"
+        systemd-inhibit --list --no-pager 2>/dev/null | head -n 12 | sed 's/^/    /'
+    fi
+    echo "  busiest processes right now:"
+    ps -eo pid=,pcpu=,pmem=,comm= --sort=-pcpu 2>/dev/null | head -n 6 | sed 's/^/    /'
+    dsl="$(command -v dot-sleep-log || true)"; [ -n "$dsl" ] || dsl="$repo/bin/dot-sleep-log"
+    if [ -x "$dsl" ]; then
+        echo "  suspend history (dot-sleep-log):"
+        sl="$("$dsl" report 5 2>&1)"
+        printf '%s\n' "$sl" | sed 's/^/    /'
+        avg="$(printf '%s\n' "$sl" | sed -n 's/^average over .*: \([0-9.]*\) %\/h$/\1/p')"
+        if [ -n "$avg" ] && awk -v a="$avg" 'BEGIN { exit !(a > 2.0) }'; then
+            issue "suspend costs ${avg} %/h of battery (a healthy suspend is well under 1 %/h). Check the 'power & suspend' section: mem_sleep, suspend_stats hw_sleep, the GPU's runtime_pm, inhibitors"
+        fi
+    fi
+
+    sec "bluetooth / network hardware (why a Quick settings tile may be missing)"
+    if have bluetoothctl; then echo "  bluetoothctl: $(command -v bluetoothctl)"; else echo "  bluetoothctl: NOT INSTALLED (pacman -S bluez-utils)"; fi
+    bt_adapters="$(ls /sys/class/bluetooth 2>/dev/null | grep -c '^hci' || true)"
+    echo "  adapters the kernel sees (/sys/class/bluetooth): ${bt_adapters:-0}"
+    if have systemctl; then
+        echo "  bluetooth.service: $(systemctl is-active bluetooth 2>/dev/null || true) (enabled: $(systemctl is-enabled bluetooth 2>/dev/null || true))"
+    fi
+    if have rfkill; then rfkill list bluetooth 2>/dev/null | sed 's/^/  rfkill: /'; fi
+    if have bluetoothctl; then
+        echo "  bluetoothctl list: $(timeout 5 bluetoothctl list 2>&1 | head -n 2 | tr '\n' ' ')"
+    fi
+    if [ "${bt_adapters:-0}" -eq 0 ]; then
+        echo "  -> no Bluetooth adapter: no Bluetooth tile or bar icon is expected (a VM usually has none; for"
+        echo "     a USB adapter pass it through to the VM)"
+    elif ! have bluetoothctl; then
+        issue "a Bluetooth adapter exists but bluetoothctl is not installed: pacman -S bluez bluez-utils"
+    elif [ "$(systemctl is-active bluetooth 2>/dev/null)" != active ]; then
+        issue "a Bluetooth adapter exists but bluetooth.service is not running, so the tile stays hidden: sudo systemctl enable --now bluetooth"
+    fi
+    if have nmcli; then
+        echo "  network devices (nmcli):"
+        nmcli -t -f TYPE,STATE,DEVICE device 2>/dev/null | sed 's/^/    /'
+        nmcli -t -f TYPE device 2>/dev/null | grep -qx wifi || echo "  -> no Wi-Fi adapter: the Wi-Fi tile is replaced by an Ethernet tile"
     fi
 
     sec "menu commands (everything the menu can run)"

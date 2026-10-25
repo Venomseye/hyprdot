@@ -6,11 +6,19 @@
 #
 #   hypr     syntax-check the Lua config, then `hyprctl reload`
 #   shell    stop every Quickshell of yours, then start exactly one
+#   boot     what the login autostart runs: start Quickshell unless it is already running
 #   all      both, Hyprland first (default)
 #
 #   -n, --dry-run   show what would happen, change nothing
-#   -f, --force     reload Hyprland even if the Lua syntax check fails
+#   -f, --force     go ahead even if a check fails (Lua syntax for hypr, dot-check for shell)
 #   -h, --help      this message
+#
+# Safety net for the shell (a QML error means NO bar, menu or notifications at all):
+#   * Before stopping a working Quickshell, `dot-check --live --qml` examines the installed QML.
+#     If it finds errors the running shell is left alone and the errors are printed.
+#   * After a successful start, a copy of the config is saved to ~/.cache/quickshell-lkg
+#     ("last known good"). If a later start fails to load, that copy is started instead
+#     (`quickshell -p`), and you are told. Your own files are never touched.
 #
 # Why this doesn't leave zombies or duplicates:
 #   * A zombie is a child that exited while its parent never wait()ed for it.
@@ -32,7 +40,7 @@ TARGET=all
 
 for arg in "$@"; do
     case "$arg" in
-        hypr|shell|all) TARGET="$arg" ;;
+        hypr|shell|boot|all) TARGET="$arg" ;;
         -n|--dry-run) DRY_RUN=true ;;
         -f|--force) FORCE=true ;;
         -h|--help)
@@ -49,6 +57,7 @@ done
 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
 LOG="$cache_dir/quickshell.log"
+LKG="$cache_dir/quickshell-lkg"       # last config that loaded
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'warn: %s\n' "$*" >&2; }
@@ -70,6 +79,14 @@ lua_syntax_check() {
         if command -v "$c" >/dev/null 2>&1; then checker="$c"; break; fi
     done
     if [ -z "$checker" ]; then
+        # no real Lua installed: dot-check has a best-effort fallback (strings, brackets, `end` balance)
+        local dc
+        dc="$(command -v dot-check || true)"
+        [ -n "$dc" ] || dc="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dot-check"
+        if [ -x "$dc" ]; then
+            out="$("$dc" --live --lua --quiet 2>&1)" || { err "problem in the Hyprland Lua config:"; printf '%s\n' "$out" >&2; return 1; }
+            return 0
+        fi
         warn "no luac/luajit found - skipping Lua syntax check (install 'lua' or 'luajit' to enable it)"
         return 0
     fi
@@ -171,14 +188,43 @@ report_zombies() {
     done <<<"$(shell_zombies)"
 }
 
-start_shell() {
-    local shell_bin count
+# Tell the user, but only if a shell is up to show it. With none running, notify-send would make
+# D-Bus start mako/dunst, which would then own the notification name and block Quickshell.
+notify() {
+    [ -n "$(shell_pids)" ] || return 0
+    command -v notify-send >/dev/null 2>&1 || return 0
+    notify-send -u critical -a dot-reload "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# 0 = the installed QML looks fine (or there is nothing to check it with), 1 = errors found.
+precheck_shell() {
+    local check out
+    check="$(command -v dot-check || true)"
+    [ -n "$check" ] || check="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dot-check"
+    if [ ! -x "$check" ]; then
+        warn "dot-check not found - not checking the QML before restarting"
+        return 0
+    fi
+    if out="$("$check" --live --qml --quiet 2>&1)"; then
+        return 0
+    fi
+    err "the installed Quickshell config has errors:"
+    printf '%s\n' "$out" >&2
+    return 1
+}
+
+# launch_shell [config-dir]: start Quickshell detached and wait until it has either loaded its
+# configuration or failed to. 0 = loaded and exactly one instance, 1 = anything else.
+launch_shell() {
+    local cfg="${1:-}" shell_bin count off new i outcome=""
+    local -a args=()
     shell_bin="$(command -v quickshell || true)"
     [ -n "$shell_bin" ] || { err "quickshell not found in PATH"; return 1; }
     [ -n "${WAYLAND_DISPLAY:-}" ] || { err "WAYLAND_DISPLAY not set - run this from inside your Hyprland session"; return 1; }
+    [ -n "$cfg" ] && args=(-p "$cfg")
 
     if $DRY_RUN; then
-        say "quickshell: would start $shell_bin detached (log: $LOG)"
+        say "quickshell: would start $shell_bin ${args[*]:-} detached (log: $LOG)"
         return 0
     fi
 
@@ -194,36 +240,122 @@ start_shell() {
     done
 
     mkdir -p "$cache_dir"
-    if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 262144 ]; then : >"$LOG"; fi
-    printf '\n=== %s dot-reload\n' "$(date -Is)" >>"$LOG"
+    # keep the log from growing for ever, but keep its tail (the part you need after a crash)
+    if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 262144 ]; then
+        tail -c 65536 "$LOG" >"$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG"
+    fi
+    printf '\n=== %s dot-reload%s\n' "$(date -Is)" "${cfg:+ (last known good: $cfg)}" >>"$LOG"
+    off="$(wc -c <"$LOG")"
 
-    say "quickshell: starting"
+    say "quickshell: starting${cfg:+ (last known good copy)}"
     # `9>&-` closes the lock fd in the child. Without it the long-lived
     # Quickshell would inherit the flock and every later dot-reload would fail
     # with "already running" until Quickshell exited.
     if command -v setsid >/dev/null 2>&1; then
-        QT_QPA_PLATFORM=wayland setsid -f "$shell_bin" >>"$LOG" 2>&1 </dev/null 9>&-
+        QT_QPA_PLATFORM=wayland setsid -f "$shell_bin" ${args[@]+"${args[@]}"} >>"$LOG" 2>&1 </dev/null 9>&-
     else
-        QT_QPA_PLATFORM=wayland nohup "$shell_bin" >>"$LOG" 2>&1 </dev/null 9>&- &
+        QT_QPA_PLATFORM=wayland nohup "$shell_bin" ${args[@]+"${args[@]}"} >>"$LOG" 2>&1 </dev/null 9>&- &
         disown
     fi
 
-    sleep 2
+    # up to 10 s: wait for "Configuration Loaded", or for the failure
+    for ((i = 0; i < 20; i++)); do
+        sleep 0.5
+        new="$(tail -c +"$((off + 1))" "$LOG" 2>/dev/null)"
+        if printf '%s' "$new" | grep -q 'Failed to load configuration'; then outcome=failed; break; fi
+        if [ -z "$(shell_pids)" ]; then outcome=exited; break; fi
+        if printf '%s' "$new" | grep -q 'Configuration Loaded'; then outcome=loaded; break; fi
+    done
+
+    case "$outcome" in
+        failed)
+            err "quickshell did not load its configuration. Last log lines ($LOG):"
+            tail -c +"$((off + 1))" "$LOG" | tail -n 15 >&2
+            return 1
+            ;;
+        exited)
+            err "quickshell exited right after starting. Last log lines ($LOG):"
+            tail -c +"$((off + 1))" "$LOG" | tail -n 15 >&2
+            return 1
+            ;;
+        loaded) ;;
+        *) warn "quickshell has not reported 'Configuration Loaded' after 10 s - assuming it is just slow" ;;
+    esac
+
     count="$(shell_pids | grep -c . || true)"
-    if [ "$count" -eq 0 ]; then
-        err "quickshell exited right after starting. Last log lines ($LOG):"
-        tail -n 15 "$LOG" >&2
-        return 1
-    elif [ "$count" -gt 1 ]; then
+    if [ "$count" -gt 1 ]; then
         warn "$count quickshell instances are running - expected 1"
         return 1
     fi
     say "quickshell: ok (pid $(shell_pids))"
+    return 0
+}
+
+# Remember the config that just loaded, so a later broken edit has something to fall back on.
+snapshot_lkg() {
+    $DRY_RUN && return 0
+    local tmp="$LKG.tmp.$$"
+    rm -rf "$tmp"
+    if cp -rL "$config_dir/quickshell" "$tmp" 2>/dev/null; then
+        rm -rf "$LKG"
+        mv "$tmp" "$LKG"
+        say "quickshell: saved a last-known-good copy ($LKG)"
+    else
+        rm -rf "$tmp"
+        warn "could not save a last-known-good copy"
+    fi
+}
+
+# Start the live config; if it does not load, fall back to the last copy that did.
+start_shell() {
+    if launch_shell; then
+        snapshot_lkg
+        return 0
+    fi
+    $DRY_RUN && return 1
+    if [ -d "$LKG" ]; then
+        warn "the new config did not load - starting the last known good copy instead"
+        stop_shell >/dev/null 2>&1 || true
+        if launch_shell "$LKG"; then
+            notify "Quickshell: config has errors" "Running the last working copy. Fix the errors, then run: dot-reload shell   (see: dot-check --live)"
+            warn "RUNNING THE OLD COPY. Find the error with: dot-check --live   (or: qs, in a terminal)"
+        fi
+    else
+        warn "there is no last-known-good copy yet to fall back on"
+    fi
+    return 1
 }
 
 restart_shell() {
+    if ! precheck_shell; then
+        if $FORCE; then
+            warn "errors found, restarting anyway (--force)"
+        else
+            err "not restarting: the running shell (if any) is left alone. Fix the errors above, or pass --force."
+            notify "Quickshell: not restarted" "The config has errors, so the running shell was left alone. Run: dot-check --live"
+            return 1
+        fi
+    fi
     stop_shell || return 1
     report_zombies
+    start_shell
+}
+
+# Login autostart: do nothing if it is already up; with a broken config prefer the last good copy.
+boot_shell() {
+    if [ -n "$(shell_pids)" ]; then
+        say "quickshell: already running"
+        return 0
+    fi
+    if ! precheck_shell; then
+        if [ -d "$LKG" ]; then
+            warn "config has errors - starting the last known good copy"
+            launch_shell "$LKG" || return 1
+            notify "Quickshell: config has errors" "Running the last working copy. Run: dot-check --live"
+            return 0
+        fi
+        warn "config has errors and there is no last-known-good copy yet - trying it anyway"
+    fi
     start_shell
 }
 
@@ -235,6 +367,7 @@ status=0
 case "$TARGET" in
     hypr)  reload_hypr || status=1 ;;
     shell) restart_shell || status=1 ;;
+    boot)  boot_shell || status=1 ;;
     all)   reload_hypr || status=1
            restart_shell || status=1 ;;
 esac

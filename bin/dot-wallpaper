@@ -42,12 +42,16 @@ say()  { printf '%s\n' "$*"; }
 warn() { printf 'warn: %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# The repo's bundled wallpapers, found through the ~/.local/bin symlink.
+# The bundled wallpapers: next to a checkout (run from the repo, or a --link install through the
+# ~/.local/bin symlink), else the copy a normal install keeps in ~/.local/share/hyprdot.
 bundle_dir() {
-    local self root
+    local self root d
     self="$(readlink -f "${BASH_SOURCE[0]}")"
     root="$(cd "$(dirname "$self")/.." && pwd)"
-    [ -d "$root/wallpapers" ] && printf '%s\n' "$root/wallpapers"
+    for d in "$root/wallpapers" "${XDG_DATA_HOME:-$HOME/.local/share}/hyprdot/wallpapers"; do
+        [ -d "$d" ] && { printf '%s\n' "$d"; return 0; }
+    done
+    return 1
 }
 
 # count_images <dir-or-file>
@@ -105,7 +109,7 @@ step_pinned() {   # step_pinned next-wallpaper|previous-wallpaper
 
 change() {   # change next-wallpaper|previous-wallpaper
     have wpaperctl || die "wpaperctl not found (it ships with wpaperd)"
-    pgrep -x wpaperd >/dev/null 2>&1 || die "wpaperd is not running. Start it: setsid -f wpaperd -d   (or run: dot-wallpaper doctor)"
+    wpaperd_running || die "wpaperd is not running. Start it: setsid -f wpaperd -d   (or run: dot-wallpaper doctor)"
     local first; first="$(config_paths | head -n 1)"
     if [ -n "$first" ] && [ -f "$first" ]; then
         step_pinned "$1"
@@ -125,7 +129,7 @@ doctor() {
 
     say "== wpaperd =="
     if have wpaperd; then say "  installed: $(command -v wpaperd)"; else note "wpaperd is not installed"; fi
-    if pgrep -x wpaperd >/dev/null 2>&1; then say "  running: pid $(pgrep -x wpaperd | head -1)"; else note "wpaperd is not running (setsid -f wpaperd -d)"; fi
+    if wpaperd_running; then say "  running: pid $(pgrep -x wpaperd | head -1)"; else note "wpaperd is not running (setsid -f wpaperd -d)"; fi
     have wpaperctl || note "wpaperctl not found - the next/previous keys and menu entries can't work"
 
     say; say "== config: $CFG =="
@@ -240,12 +244,35 @@ write_paths() {
     cat "$tmp" >"$CFG"; rm -f "$tmp"
 }
 
+# A wpaperd that is actually alive. `pgrep -x` also matches a process that has died but not been
+# reaped yet (a zombie), which made a just-crashed wpaperd look like it was still running.
+wpaperd_running() {
+    ps -u "$(id -u)" -o stat=,comm= 2>/dev/null | awk '$2 == "wpaperd" && $1 !~ /^Z/ { f = 1 } END { exit !f }'
+}
 restart_wpaperd() {
     have wpaperd || return 0
     pkill -x wpaperd 2>/dev/null; sleep 0.4
     if [ -n "${WAYLAND_DISPLAY:-}" ]; then setsid -f wpaperd -d >/dev/null 2>&1 </dev/null; fi
 }
 
+# Apply a config change to the RUNNING wpaperd. It notices an edited config.toml but does not redraw
+# when `path` changes (upstream issue #201: the new image only shows after `wpaperctl next`), which
+# is why this script used to kill and restart wpaperd for every change: a new process and a flash each
+# time. wpaperd 1.3 can be told directly instead; the restart is kept as the fallback for an older
+# wpaperd, a wpaperd that is not running, or a command that fails.
+apply_pinned() {      # apply_pinned <image>
+    if wpaperd_running && have wpaperctl && wpaperctl set-wallpaper "$1" >/dev/null 2>&1; then
+        return 0
+    fi
+    restart_wpaperd
+}
+apply_rotation() {
+    if wpaperd_running && have wpaperctl; then
+        sleep 0.3                      # let wpaperd pick up the edited path first
+        wpaperctl next-wallpaper >/dev/null 2>&1 && return 0
+    fi
+    restart_wpaperd
+}
 run_hook() {   # re-theme straight away instead of waiting for wpaperd's exec
     [ -x "$HOOK" ] && "$HOOK" manual "$1" >/dev/null 2>&1
 }
@@ -261,7 +288,7 @@ cmd_set() {
     # remember the folder we were rotating through, once
     if [ ! -s "$FOLDER_FILE" ] && [ -d "$first" ]; then printf '%s\n' "$first" >"$FOLDER_FILE"; fi
     write_paths "$img"
-    restart_wpaperd
+    apply_pinned "$img"
     run_hook "$img"
     say "wallpaper set: $(basename "$img")  (pinned - 'dot-wallpaper rotate' resumes rotation)"
 }
@@ -270,7 +297,7 @@ cmd_rotate() {
     local dir; dir="$(rotation_folder)"
     [ -d "$dir" ] || die "rotation folder $dir does not exist"
     write_paths "$dir"
-    restart_wpaperd
+    apply_rotation
     say "rotating through $dir"
 }
 

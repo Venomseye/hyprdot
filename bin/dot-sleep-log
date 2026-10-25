@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#
+# Record battery level around suspend, so "how much does suspend cost?" has a number.
+#
+#   dot-sleep-log before|after     (run by hypr/hypridle.conf: before_sleep_cmd / after_sleep_cmd)
+#   dot-sleep-log report [N]       the last N suspend/resume pairs (default 5) with drain per hour
+#
+# Log: ~/.local/state/dot/sleep.log   one line per event:  <epoch> <before|after> <percent> <uWh> <status>
+# `dot-doctor` prints the same report and flags a high drain. No battery (a desktop): times only.
+
+set -uo pipefail
+
+state="${XDG_STATE_HOME:-$HOME/.local/state}/dot"
+log="$state/sleep.log"
+ps_dir="${DOT_POWER_SUPPLY_DIR:-/sys/class/power_supply}"     # overridable for tests
+
+battery_dir() {
+    local d
+    for d in "$ps_dir"/BAT*; do [ -r "$d/capacity" ] && { printf '%s' "$d"; return 0; }; done
+    return 1
+}
+
+read_battery() {   # prints: <percent> <energy_uWh|charge_uAh> <status>   or "- - -"
+    local d e
+    d="$(battery_dir)" || { echo "- - -"; return; }
+    e="-"
+    for f in energy_now charge_now; do [ -r "$d/$f" ] && { e="$(cat "$d/$f")"; break; }; done
+    echo "$(cat "$d/capacity" 2>/dev/null || echo -) $e $(cat "$d/status" 2>/dev/null | tr ' ' '_' || echo -)"
+}
+
+append() {
+    mkdir -p "$state"
+    printf '%s %s %s\n' "$(date +%s)" "$1" "$(read_battery)" >>"$log"
+    # keep it small
+    if [ "$(wc -l <"$log" 2>/dev/null || echo 0)" -gt 400 ]; then
+        tail -n 200 "$log" >"$log.tmp" && mv -f "$log.tmp" "$log"
+    fi
+}
+
+report() {
+    local n="${1:-5}"
+    [ -r "$log" ] || { echo "no suspends recorded yet ($log)"; return 0; }
+    awk -v n="$n" '
+        $2 == "before" { b_t = $1; b_p = $3; b_e = $4; b_s = $5; have = 1; next }
+        $2 == "after" && have {
+            dur = $1 - b_t; have = 0
+            line = sprintf("%s  asleep %5.1f min", strftime("%Y-%m-%d %H:%M", b_t), dur / 60)
+            if (b_p != "-" && $3 != "-") {
+                drop = b_p - $3
+                line = line sprintf("  battery %s%% -> %s%% (%+d%%)", b_p, $3, -drop)
+                if (dur >= 600) {
+                    rate = drop / (dur / 3600)
+                    line = line sprintf("  = %.1f %%/h", rate)
+                    # remember for the verdict
+                    last_rate = rate; last_dur = dur
+                }
+                if (b_s != "Discharging") line = line "  (charging: not meaningful)"
+            }
+            rows[++k] = line
+            if (b_s == "Discharging" && dur >= 600 && b_p != "-" && $3 != "-") { sum_drop += drop; sum_dur += dur; cnt++ }
+        }
+        END {
+            start = (k > n) ? k - n + 1 : 1
+            for (i = start; i <= k; i++) print rows[i]
+            if (cnt > 0) printf "average over %d suspend(s) of 10+ min on battery: %.1f %%/h\n", cnt, sum_drop / (sum_dur / 3600)
+            if (k == 0) print "no complete suspend/resume pair recorded yet"
+        }' "$log"
+}
+
+case "${1:-}" in
+    before|after) append "$1" ;;
+    report) report "${2:-5}" ;;
+    -h|--help|"") sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *) echo "dot-sleep-log: unknown argument: $1" >&2; exit 2 ;;
+esac
+exit 0

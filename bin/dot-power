@@ -38,6 +38,8 @@ case "${1:-}" in
         have loginctl || complain "loginctl not found"
         if pgrep -x hypridle >/dev/null 2>&1; then
             exec loginctl lock-session
+        elif have dot-lock; then
+            exec dot-lock           # picks the light lock screen in a VM
         elif have hyprlock; then
             pgrep -x hyprlock >/dev/null 2>&1 && exit 0
             exec hyprlock

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Start hyprlock (once). Used by hypr/hypridle.conf (lock_cmd) and `dot-power lock`.
+#
+# The normal lock screen blurs a screenshot of your desktop in 3 passes. Without a GPU - a virtual
+# machine, or a very weak one - that is done on the CPU and the locked machine stays busy. In that
+# case (the same rule as hypr/looknfeel.lua) a light config is used: a solid colour and no screenshot.
+#   automatic    systemd-detect-virt says this is a VM
+#   force on     touch ~/.config/hypr/low-effects        force off   touch ~/.config/hypr/full-effects
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+# "already locked" must mean a LIVE hyprlock: pgrep also matches a dead, not yet reaped one.
+hyprlock_running() {
+    ps -u "$(id -u)" -o stat=,comm= 2>/dev/null | awk '$2 == "hyprlock" && $1 !~ /^Z/ { f = 1 } END { exit !f }'
+}
+hyprlock_running && exit 0
+command -v hyprlock >/dev/null 2>&1 || { echo "dot-lock: hyprlock is not installed (pacman -S hyprlock)" >&2; exit 1; }
+
+low=false
+if [ -e "$config/hypr/full-effects" ]; then
+    low=false
+elif [ -e "$config/hypr/low-effects" ] || [ "${DOT_LOW_EFFECTS:-}" = 1 ]; then
+    low=true
+else
+    virt="$(systemd-detect-virt --vm 2>/dev/null || true)"
+    if [ -n "$virt" ] && [ "$virt" != none ]; then low=true; fi
+fi
+
+if $low && [ -r "$config/hypr/hyprlock-low.conf" ]; then
+    # A lock screen must never fail to appear. If the light config is rejected (hyprlock exits with an
+    # error straight away) fall back to the normal one instead of leaving the machine unlocked.
+    started="$(date +%s)"
+    hyprlock -c "$config/hypr/hyprlock-low.conf"
+    rc=$?
+    # 130/137/143 = hyprlock was killed on purpose (Ctrl-C, SIGKILL, SIGTERM): do not start another.
+    # Any other failure within 3 s (a rejected config, a crash) means the light config did not work.
+    case "$rc" in 0|130|137|143) exit "$rc" ;; esac
+    if [ "$(( $(date +%s) - started ))" -lt 3 ]; then
+        echo "dot-lock: the light config failed (exit $rc) - using the normal lock screen" >&2
+        exec hyprlock
+    fi
+    exit "$rc"
+fi
+exec hyprlock
