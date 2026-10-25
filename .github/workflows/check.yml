@@ -1,0 +1,42 @@
+name: check
+
+# Runs on every push and pull request. Everything here is also available locally:
+#   bin/dot-check               the checks below
+#   python3 tests/test_qmlcheck.py && bash tests/test_dot_reload.sh
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck lua5.4 python3 procps util-linux
+
+      - name: dot-check (shell syntax, Lua syntax, JSON, QML structure)
+        run: bin/dot-check
+
+      - name: QML checker catches injected faults (and has no false positives)
+        run: python3 tests/test_qmlcheck.py
+
+      - name: dot-reload safety net (fake quickshell)
+        run: bash tests/test_dot_reload.sh
+
+      - name: install.sh (copy mode, updates, backups, migration from --link)
+        run: bash tests/test_install.sh
+
+      - name: Wallpaper without restarts, light lock screen, Bluetooth monitor command
+        run: bash tests/test_wallpaper_lock_bt.sh
+
+      - name: Sleep logger and theme-hook skipping
+        run: bash tests/test_sleep_and_theme.sh
+
+      - name: Lua sanity checker (the fallback used when luac is missing)
+        run: |
+          python3 tools/luasanity.py config/hypr/*.lua
