@@ -69,9 +69,19 @@ nothing. There is deliberately no player popup or seek bar.
 
 ## Performance notes
 
-* Background state (Wi-Fi, Bluetooth, brightness, power profile, night light, stay awake) is polled
-  every 20-30 s, and every 3-8 s only while Quick settings is open (opening it refreshes at once).
-  Each poll starts a small process, so this removes most of the shell's idle wake-ups.
+* **Events instead of polling.** Network state follows `nmcli monitor` and Bluetooth follows BlueZ's
+  D-Bus signals (`dbus-monitor`), so a change shows at once. The poll that remains is only a safety
+  net: 60 s, or 10 s while Quick settings is open. Brightness, power profile, night light and stay
+  awake only change when you change them (or rarely, from outside), so they are checked every 90 s
+  and immediately whenever Quick settings opens.
+* **Wallpaper changes no longer restart wpaperd.** `dot-wallpaper set/next/prev` tell the running
+  wpaperd with `wpaperctl set-wallpaper`, and `rotate` with `wpaperctl next-wallpaper`; only an older
+  wpaperd, or one that is not running, still gets restarted (that was a new process and a flash on
+  every change). The theme hook also skips the Hyprland reload and the GTK refresh when the generated
+  colours and light/dark mode are unchanged.
+* **Low-effects mode.** In a VM (or with `~/.config/hypr/low-effects`) blur, shadows and animations are
+  off and the lock screen is a solid colour (`dot-lock`, `hypr/hyprlock-low.conf`): they are drawn on
+  the CPU there. `~/.config/hypr/full-effects` turns the full look back on.
 * Nothing in the bar animates while a track plays, so it does not keep redrawing.
 
 ## Customising
@@ -81,8 +91,9 @@ nothing. There is deliberately no player popup or seek bar.
   It is appended to the top level and reloads when saved.
 * Look: `theme/Style.qml` (bar height 34, gap 10, radius 10, menu radius 12, font).
 * Persisted toggles live in `~/.local/state/quickshell-dot/state.json`.
-* After editing QML, `dot-reload shell` restarts it (symlinked files may not
-  trigger Quickshell's own live reload).
+* After editing QML, `dot-reload shell` restarts it. Edit the live files in `~/.config/quickshell`
+  (Quickshell reloads them as you save), or edit the repo and run `bash install.sh` again - your
+  edited copies are backed up before being replaced.
 
 ## Not implemented (Omarchy has these)
 

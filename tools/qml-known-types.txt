@@ -1,0 +1,43 @@
+# Qt / Quickshell types used by QML that is known to load. tools/qmlcheck.py warns about any other
+# type (usually a typo). Regenerate:  python3 tools/qmlcheck.py config/quickshell --list-types
+Behavior
+ColorAnimation
+Column
+ColumnLayout
+Connections
+FileView
+Flickable
+Flow
+GridLayout
+GridView
+HoverHandler
+IconImage
+Image
+IpcHandler
+Item
+MouseArea
+NotificationServer
+NumberAnimation
+PanelWindow
+ParallelAnimation
+PauseAnimation
+Process
+PwObjectTracker
+Rectangle
+Region
+Repeater
+Row
+RowLayout
+Scope
+SequentialAnimation
+ShellRoot
+Singleton
+StdioCollector
+SystemClock
+Text
+TextField
+Timer
+Translate
+Variants
+# Documented Quickshell.Io type, first used by services/NetState.qml (nmcli monitor); not yet confirmed on a live system
+SplitParser

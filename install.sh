@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
-# Deploy this repo's dotfiles by symlinking them into ~/.config.
+# Install this repo's dotfiles into ~/.config and ~/.local/bin.
 #
-#   ./install.sh                 deploy
+#   ./install.sh                 COPY the files in (default). Afterwards ~/.config does not depend
+#                                on this folder: you may move or delete it.
+#   ./install.sh --link          symlink instead (for developing inside the repo; the links point
+#                                INTO this folder, so it must stay where it is)
 #   ./install.sh --dry-run       print everything it would do, change nothing
 #   ./install.sh --with-deps     also install the extra programs the keybinds and menu launch
 #   ./install.sh --yes           answer yes to every prompt (install missing packages, carry on)
@@ -17,23 +20,28 @@
 #                   on Arch it offers to install them (pacman, and an AUR helper for the rest -
 #                   building yay for you if you have none).
 #   2. chmod +x     bin/*, config/hooks/*.d/*, run-hooks, and every config/**/*.sh.
-#   3. Symlinks     config/<app>  ->  ~/.config/<app>
-#                   bin/<script>  ->  ~/.local/bin/<script>
-#   4. Backup       anything that would be replaced is MOVED (never deleted) into
-#                   ~/.config-backup-YYYYMMDD_HHMMSS/ first. That directory is only
-#                   created if something actually needs backing up.
+#   3. Copy         config/<app>/...  ->  ~/.config/<app>/...      (file by file)
+#                   bin/<script>      ->  ~/.local/bin/<script>
+#                   tools/, docs/, wallpapers/, VERSION  ->  ~/.local/share/hyprdot/
+#                   (the scripts find their helpers there, so nothing needs the repo any more)
+#   4. Backup       anything that would be replaced AND that you changed is MOVED (never deleted)
+#                   into ~/.config-backup-YYYYMMDD_HHMMSS/ first. That directory is only created
+#                   if something needs backing up. Symlinks from an older --link install are
+#                   backed up too and replaced by real files.
 #
-# Links vs real directories. Most app directories are linked whole. Directories
-# that matugen writes generated colour files into (hypr, quickshell, kitty,
-# ghostty, gtk-3.0, gtk-4.0) and ones that hold personal data (xcompose/vars)
-# are instead made REAL directories with each file linked individually. Otherwise
-# every wallpaper change would rewrite files inside this git checkout.
-# Generated files themselves are never linked: they are seeded once from the
-# bootstrap copy in config/ and then left alone, so re-running this script
-# can't stomp live wallpaper colours.
+# Re-running (= updating). ~/.local/share/hyprdot/manifest remembers a checksum of every file this
+# script installed. On the next run a file that is still exactly what was installed is simply
+# updated; a file that differs (you edited it) is backed up first; a file the repo no longer has is
+# removed only if you never touched it. Files that are not part of the repo (your wpaperd config,
+# xcompose/vars, anything you added) are never touched.
 #
-# The links point into this checkout - don't move or delete it afterwards.
-# Nothing is ever deleted except dangling links this script created earlier.
+# Generated files (the matugen colour files and the GTK/Qt settings) are seeded once from the
+# bootstrap copy in config/ and then left alone, so re-running this script can't stomp live
+# wallpaper colours.
+#
+# --link mode only: directories that matugen writes generated files into (hypr, quickshell, kitty,
+# ghostty, gtk-3.0, gtk-4.0) and ones holding personal data (xcompose) are made REAL directories
+# with each file linked individually; everything else is linked whole.
 
 set -uo pipefail
 
@@ -42,6 +50,9 @@ SRC="$ROOT/config"
 BIN_SRC="$ROOT/bin"
 DEST="${XDG_CONFIG_HOME:-$HOME/.config}"
 BIN_DEST="${XDG_BIN_HOME:-$HOME/.local/bin}"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/hyprdot"      # helper files (tools/, docs/, ...) in copy mode
+MANIFEST="$DATA/manifest"
+MODE="${DOT_INSTALL_MODE:-copy}"                          # copy | link
 BACKUP="$DEST-backup-$(date +%Y%m%d_%H%M%S)"
 
 DRY_RUN=false
@@ -56,6 +67,8 @@ for arg in "$@"; do
         -d|--with-deps) WITH_DEPS=true ;;
         -y|--yes)       ASSUME_YES=true ;;
         --no-deps)      NO_DEPS=true ;;
+        -c|--copy)      MODE=copy ;;
+        -l|--link)      MODE=link ;;
         -h|--help)
             sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
             exit 0
@@ -73,6 +86,7 @@ err()  { printf 'error: %s\n' "$*" >&2; }
 
 ERRORS=0
 linked=0; already=0; seeded=0; kept=0; backed_up=0; pruned=0; chmodded=0
+copied=0; updated=0; unchanged=0; removed=0
 BACKUP_MADE=false
 
 run() {
@@ -93,6 +107,39 @@ if [ "$(readlink -f "$DEST")" = "$(readlink -f "$SRC")" ]; then
     err "$DEST already IS $SRC (whole ~/.config linked into the repo). Undo that link first."
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Is this checkout somewhere that gets cleaned up?
+# ---------------------------------------------------------------------------
+
+# Every link created below points INTO this directory. If it lives in Downloads or /tmp and is
+# later cleaned or moved, the whole desktop loses its configuration at the next login.
+warn_fragile_location() {
+    local why=""
+    case "$ROOT/" in
+        "$HOME"/Downloads/*) why="your Downloads folder (browsers and clean-up tools empty it)" ;;
+        /tmp/*|/var/tmp/*)    why="a temporary directory (wiped on reboot)" ;;
+        "$HOME"/.cache/*)     why="a cache directory (tools may delete it)" ;;
+        /run/*|/dev/shm/*)    why="a RAM-backed directory (gone at shutdown)" ;;
+    esac
+    [ -n "$why" ] || return 0
+
+    warn "this repository is in $why:"
+    say "  $ROOT"
+    say "  Every link in ~/.config and ~/.local/bin will point into it. A safer home:"
+    say "    mkdir -p ~/.dotfiles && mv \"$ROOT\" ~/.dotfiles/hyprdot && bash ~/.dotfiles/hyprdot/install.sh"
+    say ""
+    $DRY_RUN && return 0
+    $ASSUME_YES && { say "(continuing: --yes)"; say ""; return 0; }
+    if [ -t 0 ]; then
+        local reply=""
+        read -r -p "Install from here anyway? [y/N] " reply
+        case "$reply" in
+            [yY]*) say "" ;;
+            *) err "stopping before anything was changed."; exit 1 ;;
+        esac
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # What needs which treatment
@@ -315,7 +362,7 @@ preflight() {
     [ "${#missing[@]}" -gt 0 ] || return 0
 
     warn "missing core packages: ${missing[*]}"
-    say "  The configs can still be linked, but the desktop won't work until these are installed."
+    say "  The configs can still be installed, but the desktop won't work until these packages are."
 
     if $DRY_RUN; then
         say "  (dry run: reporting only)"
@@ -508,6 +555,114 @@ prune_dangling() {
     done < <(find "$dir" -xtype l -print0 2>/dev/null)
 }
 
+# ---------------------------------------------------------------------------
+# Copy mode: manifest of what was installed
+# ---------------------------------------------------------------------------
+
+declare -A MAN_OLD=()     # key -> checksum recorded by the previous run
+declare -A MAN_NEW=()     # key -> checksum of what is installed now
+
+sum_of() { sha1sum -- "$1" 2>/dev/null | cut -d' ' -f1; }
+
+load_manifest() {
+    [ -f "$MANIFEST" ] || return 0
+    local sum key
+    while read -r sum key; do
+        [ -n "$sum" ] && [ -n "$key" ] && MAN_OLD["$key"]="$sum"
+    done <"$MANIFEST"
+}
+
+save_manifest() {
+    $DRY_RUN && return 0
+    local tmp key
+    mkdir -p "$DATA" || return 1
+    tmp="$MANIFEST.tmp.$$"
+    for key in "${!MAN_NEW[@]}"; do printf '%s  %s\n' "${MAN_NEW[$key]}" "$key"; done | sort -k2 >"$tmp" && mv -f "$tmp" "$MANIFEST"
+}
+
+# copy_file <source> <target> <manifest key> <path inside the backup dir>
+copy_file() {
+    local src="$1" target="$2" key="$3" brel="$4" new cur old
+    new="$(sum_of "$src")"
+
+    if [ -L "$target" ]; then
+        # left by an older --link install (or anything else): make it a real file
+        say "replace    $key   (was a link -> backup)"
+        backup_item "$target" "$brel" || return 1
+    elif [ -e "$target" ]; then
+        cur="$(sum_of "$target")"
+        if [ "$cur" = "$new" ]; then
+            MAN_NEW["$key"]="$new"
+            unchanged=$((unchanged + 1))
+            return 0
+        fi
+        old="${MAN_OLD[$key]:-}"
+        if [ -n "$old" ] && [ "$cur" = "$old" ]; then
+            say "update     $key"
+        else
+            say "replace    $key   (differs from the installed version -> backup)"
+            backup_item "$target" "$brel" || return 1
+        fi
+    else
+        say "copy       $key"
+    fi
+
+    run mkdir -p "$(dirname "$target")" || return 1
+    if run cp -p -- "$src" "$target"; then
+        MAN_NEW["$key"]="$new"
+        copied=$((copied + 1))
+    fi
+}
+
+# place_file <source> <target> <config-relative path> <backup path>: copy or link, per --copy/--link
+place_file() {
+    if [ "$MODE" = copy ]; then
+        copy_file "$1" "$2" "config/$3" "$4"
+    else
+        link_item "$1" "$2" "$3" "$4"
+    fi
+}
+
+# Files an earlier run installed that the repo no longer has: remove them only if you never touched them.
+prune_removed() {
+    local key rel target cur
+    for key in "${!MAN_OLD[@]}"; do
+        [ -n "${MAN_NEW[$key]:-}" ] && continue
+        case "$key" in
+            config/*) target="$DEST/${key#config/}" ;;
+            bin/*)    target="$BIN_DEST/${key#bin/}" ;;
+            data/*)   target="$DATA/${key#data/}" ;;
+            *) continue ;;
+        esac
+        [ -e "$target" ] || [ -L "$target" ] || continue
+        cur="$(sum_of "$target")"
+        if [ "$cur" = "${MAN_OLD[$key]}" ]; then
+            say "remove     $key   (no longer in the repo)"
+            run rm -- "$target" && removed=$((removed + 1))
+        else
+            say "keep       $key   (no longer in the repo, but you changed it)"
+        fi
+    done
+}
+
+# Helper files the scripts look for next to themselves in a checkout: tools/, docs/, wallpapers/, VERSION.
+install_share() {
+    [ "$MODE" = copy ] || return 0
+    say "=== Support files: -> $DATA ==="
+    local f rel
+    run mkdir -p "$DATA" || return 1
+    while IFS= read -r -d '' f; do
+        rel="${f#"$ROOT"/}"
+        copy_file "$f" "$DATA/$rel" "data/$rel" ".local/share/hyprdot/$rel"
+    done < <({
+        [ -f "$ROOT/VERSION" ] && printf '%s\0' "$ROOT/VERSION"
+        for d in tools docs wallpapers; do
+            [ -d "$ROOT/$d" ] && find "$ROOT/$d" -type f ! -path '*/__pycache__/*' -print0
+        done
+    } | sort -z)
+    say ""
+}
+
 install_split_dir() {
     local app="$1" file rel
 
@@ -521,7 +676,7 @@ install_split_dir() {
         if is_generated "$rel"; then
             seed_generated "$file" "$DEST/$rel" "$rel"
         else
-            link_item "$file" "$DEST/$rel" "$rel" "$rel"
+            place_file "$file" "$DEST/$rel" "$rel" "$rel"
         fi
     done < <(find "$SRC/$app" -type f -print0 | sort -z)
 
@@ -540,13 +695,16 @@ has_orphans() {
 }
 
 install_config() {
-    say "=== Config: $SRC -> $DEST ==="
+    say "=== Config: $SRC -> $DEST ($MODE) ==="
     run mkdir -p "$DEST" || return 1
 
     local entry app
     while IFS= read -r -d '' entry; do
         app="$(basename "$entry")"
-        if [ -d "$entry" ] && is_split_dir "$app"; then
+        if [ "$MODE" = copy ]; then
+            # real directories, file by file: files that are not in the repo stay where they are
+            if [ -d "$entry" ]; then install_split_dir "$app"; else place_file "$entry" "$DEST/$app" "$app" "$app"; fi
+        elif [ -d "$entry" ] && is_split_dir "$app"; then
             install_split_dir "$app"
         elif [ -d "$entry" ] && [ -d "$DEST/$app" ] && [ ! -L "$DEST/$app" ] && has_orphans "$DEST/$app" "$entry"; then
             say "keep       $app/   (has files that aren't in the repo - linking file by file so they stay put)"
@@ -560,13 +718,17 @@ install_config() {
 
 install_bin() {
     [ -d "$BIN_SRC" ] || return 0
-    say "=== Helper scripts: $BIN_SRC -> $BIN_DEST ==="
+    say "=== Helper scripts: $BIN_SRC -> $BIN_DEST ($MODE) ==="
     run mkdir -p "$BIN_DEST" || return 1
 
     local f name
     while IFS= read -r -d '' f; do
         name="$(basename "$f")"
-        link_item "$f" "$BIN_DEST/$name" "bin/$name" ".local/bin/$name"
+        if [ "$MODE" = copy ]; then
+            copy_file "$f" "$BIN_DEST/$name" "bin/$name" ".local/bin/$name"
+        else
+            link_item "$f" "$BIN_DEST/$name" "bin/$name" ".local/bin/$name"
+        fi
     done < <(find "$BIN_SRC" -maxdepth 1 -type f ! -name '.*' -print0 | sort -z)
 
     prune_dangling "$BIN_DEST"
@@ -608,11 +770,22 @@ install_theming() {
 
 $DRY_RUN && say "=== DRY RUN - nothing will be changed ==="
 
+case "$MODE" in
+    copy|link) ;;
+    *) err "unknown install mode '$MODE' (use --copy or --link)"; exit 2 ;;
+esac
+[ "$MODE" = link ] && warn_fragile_location
+[ "$MODE" = copy ] && load_manifest
 $WITH_DEPS && install_dependencies full
 preflight
 make_executable
 install_config
 install_bin
+install_share
+if [ "$MODE" = copy ]; then
+    prune_removed
+    save_manifest
+fi
 install_wallpapers
 install_theming
 
@@ -627,8 +800,13 @@ if [ "${#stale[@]}" -gt 0 ]; then
     say ""
 fi
 
-say "linked: $linked   already linked: $already   seeded: $seeded   live files left alone: $kept"
-say "backed up: $backed_up   pruned: $pruned   chmod +x: $chmodded   errors: $ERRORS"
+if [ "$MODE" = copy ]; then
+    say "copied: $copied   already up to date: $unchanged   seeded: $seeded   live files left alone: $kept"
+    say "backed up: $backed_up   removed: $removed   pruned: $pruned   chmod +x: $chmodded   errors: $ERRORS"
+else
+    say "linked: $linked   already linked: $already   seeded: $seeded   live files left alone: $kept"
+    say "backed up: $backed_up   pruned: $pruned   chmod +x: $chmodded   errors: $ERRORS"
+fi
 
 if $BACKUP_MADE; then
     if $DRY_RUN; then
@@ -647,6 +825,12 @@ if ! $DRY_RUN && [ "$ERRORS" -eq 0 ]; then
     say "  3. Colours switch from the placeholder palette at the first wallpaper change"
     say "     (the post-boot hook also regenerates them a few seconds after login)."
     say "  Later: dot-reload reloads Hyprland and restarts Quickshell."
+    if [ "$MODE" = copy ]; then
+        say ""
+        say "Everything was COPIED: ~/.config and ~/.local/bin no longer depend on this folder, so you can move or"
+        say "delete it. To update, unpack a newer version and run its install.sh again - a file you edited is backed"
+        say "up before it is replaced. Edit live files in ~/.config, or edit the repo and re-run install.sh."
+    fi
 fi
 
 [ "$ERRORS" -eq 0 ]

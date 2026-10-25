@@ -221,6 +221,104 @@ same two files. Check that both variables reached your terminal with `echo "$NEW
 if they are empty, that terminal was started before the change - open a new one (kitty) or restart
 Hyprland (other terminals).
 
+## "Power profile failed ... invalid choice: 'performance'"
+
+`power-profiles-daemon` only offers `performance` when your CPU/platform driver supports it; many
+desktops and VMs have just `power-saver` and `balanced`. The tile used to cycle through all three
+anyway. It now reads the real list (`powerprofilesctl list`) and cycles only through what exists
+(and is hidden when fewer than two profiles are available). Check yours: `powerprofilesctl list`.
+
+## No bar / menu after editing the QML
+
+```bash
+dot-check --live          # file:line:col of what is wrong (and Lua / JSON problems)
+dot-reload shell          # restarts only if the check passes
+```
+
+If the new config does not load, `dot-reload` starts the last config that did
+(`~/.cache/quickshell-lkg`) and says so; fix the error and run `dot-reload shell` again. To
+run the old copy by hand: `quickshell -p ~/.cache/quickshell-lkg`.
+
+## No Wi-Fi / Bluetooth tile in Quick settings
+
+Run `dot-doctor` and read the "bluetooth / network hardware" section: it says which of these applies.
+Those tiles only appear when the hardware exists: a Wi-Fi tile needs a Wi-Fi adapter (`nmcli device
+status` lists one as type `wifi`), a Bluetooth tile needs an adapter BlueZ knows about
+(`bluetoothctl list`). A VM or a desktop usually has neither. A machine with no Wi-Fi adapter gets an
+**Ethernet** tile instead: it shows the wired connection and a click opens nmtui. The bar's network
+icon: left click = Quick settings, right click = nmtui.
+
+If Bluetooth hardware exists but there is no tile: `pacman -S bluez bluez-utils` and
+`sudo systemctl enable --now bluetooth` (Arch does not start the service by default), then check
+`bluetoothctl list` shows a controller and `rfkill list bluetooth` is not "Hard blocked". The shell
+notices within a minute (or at once when Quick settings opens); it no longer needs a restart.
+
+## Wallpaper change flashes / "wpaperd restarted"
+
+wpaperd ignores an edited `path` until told to redraw (upstream issue #201), so this script used to
+kill and restart it on every change. It now runs `wpaperctl set-wallpaper <image>` (pinning) or
+`wpaperctl next-wallpaper` (`dot-wallpaper rotate`) and restarts wpaperd only if that fails. Check
+that wpaperctl has them: `wpaperctl --help | grep -E 'set-wallpaper|next-wallpaper'`.
+
+## The lock screen is heavy / slow to appear
+
+The normal lock screen blurs a screenshot of your desktop in 3 passes. In a VM, or on a weak GPU, that
+is drawn on the CPU. `dot-lock` (used by Super+L and hypridle) therefore starts
+`hypr/hyprlock-low.conf` (a solid colour) there. If hyprlock rejects that file it falls back to the
+normal lock screen, so the machine never stays unlocked. Force it with
+`touch ~/.config/hypr/low-effects`, or keep the full one with `touch ~/.config/hypr/full-effects`.
+
+## Hyprland uses a lot of CPU (especially in a VM)
+
+`dot-doctor` -> "power & suspend" -> "busiest processes". If `Hyprland` itself is at 50-150% while
+you are idle, it is drawing blur, shadows and animations on the CPU. That happens in a VM without 3D
+acceleration (`virtualisation: kvm` plus `failed to create dri2 screen` in the Quickshell log), or
+with a very weak GPU. `hypr/looknfeel.lua` now switches those effects off automatically when
+`systemd-detect-virt` reports a VM. Force it on or off with an empty marker file, then `dot-reload hypr`:
+
+```bash
+touch ~/.config/hypr/low-effects     # no blur / shadows / animations
+touch ~/.config/hypr/full-effects    # keep them even in a VM
+hyprctl getoption decoration:blur:enabled     # check what is active
+```
+
+The real fix in a VM is 3D acceleration (virtio-gpu with virgl, or GPU passthrough).
+
+## Suspend / idle uses a lot of power
+
+First find out WHICH problem you have:
+
+1. **The machine is awake and idle but busy** (fans, battery): `dot-doctor` -> "power & suspend" lists
+   the busiest processes. Note that out of the box hypridle only dims and locks; it never turns the
+   screen off or suspends (see the two OPTIONAL blocks at the end of `hypr/hypridle.conf`), so a locked
+   laptop keeps its display on.
+2. **It really suspends but the battery drains**: `dot-sleep-log report` (recorded automatically on
+   every suspend) prints `battery 90% -> 66% ... = 3.0 %/h`. Under ~1 %/h is healthy. If it is
+   higher, the "power & suspend" section shows the likely reasons: `mem_sleep` showing only
+   `[s2idle]` (no `deep`), `suspend_stats/last_hw_sleep` being 0 (the hardware never reached sleep),
+   a discrete GPU whose `runtime_pm` stays `active`, or inhibitors.
+3. **The suspend itself fails or hangs**: `suspend_stats/fail` and `last_failed_dev` name the device.
+
+Also fixed in this version: `hypridle.conf` called `hyprctl dispatch dpms on`, which on Hyprland
+0.55+ (Lua config) is a syntax error that does nothing; it now uses
+`hyprctl dispatch 'hl.dsp.dpms({action = "on"})'`.
+
+## What does install.sh do? (copy vs link)
+
+By default it **copies**: `config/<app>/...` -> `~/.config/<app>/...`, `bin/*` -> `~/.local/bin`, and
+the helper files (`tools/`, `docs/`, `wallpapers/`, `VERSION`) -> `~/.local/share/hyprdot`. After that
+the repo folder can be moved or deleted. Things it does NOT overwrite: matugen's generated colour
+files and the GTK/Qt settings (seeded once), and anything that is not part of the repo (your
+`wpaperd/config.toml`, `xcompose/vars`, files you added).
+
+Re-running it updates: a file that still equals what was installed is replaced silently; one you
+edited is moved to `~/.config-backup-<time>/` first; one the repo dropped is removed only if you
+never touched it. The record lives in `~/.local/share/hyprdot/manifest`.
+
+An older install made **symlinks** into the repo (that is why `dot-doctor` warned about a repo in
+Downloads). Running the new `install.sh` once converts them: each link is moved to the backup and
+replaced by a real file. `bash install.sh --link` still gives the symlink behaviour for developing.
+
 ## Only one file manager window opens
 
 Nautilus is single-instance, so a bare `nautilus` just re-activates the running one.
@@ -228,8 +326,9 @@ Nautilus is single-instance, so a bare `nautilus` just re-activates the running 
 
 ## Log out / Reboot / Shut down need Enter twice
 
-That is deliberate: they ask "Enter again to confirm" (red, on the row) so a stray key can't
-end your session. Moving to another row cancels it; Esc cancels it. To run them on the first
+That is deliberate: the first Enter (or click) turns the row red and says "Press again to confirm", so a
+stray key can't end your session. (Older versions never showed that hint - a bug in how the row was
+compared with the pending action - so it just seemed to need two presses for no reason.) Moving to another row cancels it; Esc cancels it. To run them on the first
 Enter, set `confirmPower: false` in `config/quickshell/theme/Style.qml` and `dot-reload shell`.
 (Older versions also cancelled the confirmation whenever the mouse moved a few pixels, which made
 clicking Log out start over forever - fixed.)
