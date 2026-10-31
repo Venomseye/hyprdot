@@ -86,6 +86,20 @@ if wants_software_render() then
 	hl.env("QT_QUICK_BACKEND", "software")
 end
 
+-- Optional UI scale (`dot-ui-scale 1.25`): applied to Quickshell only.
+local ui_scale = ""
+do
+	local base = os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")
+	local f = io.open(base .. "/hypr/ui-scale", "r")
+	if f then
+		local line = f:read("*l") or ""
+		f:close()
+		if line:match("^%s*%d+%.?%d*%s*$") then
+			ui_scale = "QT_SCALE_FACTOR=" .. line:gsub("%s", "") .. " "
+		end
+	end
+end
+
 -------------------
 ---- AUTOSTART ----
 -------------------
@@ -105,13 +119,15 @@ hl.on("hyprland.start", function()
 	-- Order matters: wpaperd fires the matugen hook, which writes fresh
 	-- colours; Quickshell then reads them on launch.
 	hl.exec_cmd(guarded("wpaperd", "wpaperd -d"))
+	-- One wallpaper on every display + automatic changes (dot-wallpaper rotate). Waits for wpaperd.
+	hl.exec_cmd(guarded("dot-wallpaper", "( sleep 4; setsid -f dot-wallpaper daemon ) >/dev/null 2>&1 &"))
 	-- Quickshell's output goes to ~/.cache/quickshell.log (read it when the bar
 	-- is missing; `dot-doctor` prints it for you).
 	-- `dot-reload boot` checks the QML first, starts Quickshell, and if the config does not load
 	-- falls back to the last copy that did (see `dot-reload --help`). It also trims the log. Without
 	-- dot-reload (a bare checkout) the old direct start is used.
 	hl.exec_cmd(guarded("quickshell",
-		"if command -v dot-reload >/dev/null 2>&1; then dot-reload boot; else pgrep -x quickshell >/dev/null || { pkill -x mako 2>/dev/null; pkill -x dunst 2>/dev/null; mkdir -p \"$HOME/.cache\" && QT_QPA_PLATFORM=wayland quickshell >>\"$HOME/.cache/quickshell.log\" 2>&1; }; fi"))
+		"if command -v dot-reload >/dev/null 2>&1; then dot-reload boot; else pgrep -x quickshell >/dev/null || { pkill -x mako 2>/dev/null; pkill -x dunst 2>/dev/null; mkdir -p \"$HOME/.cache\" && " .. ui_scale .. "QT_QPA_PLATFORM=wayland quickshell >>\"$HOME/.cache/quickshell.log\" 2>&1; }; fi"))
 
 	-- Delayed startup tasks live in ~/.config/hooks/.d/post-boot.d/. They sleep
 	-- and poll, so run them detached rather than inline.
