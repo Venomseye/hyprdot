@@ -251,6 +251,9 @@ launch_shell() {
     # `9>&-` closes the lock fd in the child. Without it the long-lived
     # Quickshell would inherit the flock and every later dot-reload would fail
     # with "already running" until Quickshell exited.
+    # optional UI scale from `dot-ui-scale` (QT_SCALE_FACTOR for Quickshell only)
+    ui_scale="$(head -n1 "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/ui-scale" 2>/dev/null | tr -d '[:space:]')"
+    printf '%s' "$ui_scale" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && export QT_SCALE_FACTOR="$ui_scale"
     if command -v setsid >/dev/null 2>&1; then
         QT_QPA_PLATFORM=wayland setsid -f "$shell_bin" ${args[@]+"${args[@]}"} >>"$LOG" 2>&1 </dev/null 9>&-
     else
