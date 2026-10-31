@@ -121,6 +121,10 @@ apply_theme() {
         return 0
     fi
 
+    # Nudge ANSI colours that are too faint to read on the terminal background (never fatal).
+    dc="$(command -v dot-contrast 2>/dev/null || true)"; [ -n "$dc" ] || dc="$HOME/.local/bin/dot-contrast"
+    [ -x "$dc" ] && "$dc" 2>&1 || true
+
     if [ ! -x "$RUN_HOOKS" ]; then
         log "$RUN_HOOKS missing or not executable - theme-set hooks skipped"
         return 0
