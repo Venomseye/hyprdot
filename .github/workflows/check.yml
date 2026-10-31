@@ -34,6 +34,12 @@ jobs:
       - name: Wallpaper without restarts, light lock screen, Bluetooth monitor command
         run: bash tests/test_wallpaper_lock_bt.sh
 
+      - name: btop follows the theme; every dot-* launcher class has a float rule
+        run: bash tests/test_btop_theme.sh
+
+      - name: dot-thermal (fake sensors/fans, every misconfiguration it must catch, setup)
+        run: bash tests/test_thermal.sh
+
       - name: Sleep logger and theme-hook skipping
         run: bash tests/test_sleep_and_theme.sh
 
