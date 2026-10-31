@@ -10,6 +10,7 @@
 #   ./install.sh --with-deps     also install the extra programs the keybinds and menu launch
 #   ./install.sh --yes           answer yes to every prompt (install missing packages, carry on)
 #   ./install.sh --no-deps       never offer to install packages
+#   ./install.sh --uninstall     remove what a copy install put in place (files you changed are kept)
 #   ./install.sh --help          this message
 #
 # Not executable after unpacking an archive? Run it as:  bash install.sh
@@ -28,6 +29,10 @@
 #                   into ~/.config-backup-YYYYMMDD_HHMMSS/ first. That directory is only created
 #                   if something needs backing up. Symlinks from an older --link install are
 #                   backed up too and replaced by real files.
+#
+# Thermals: on Arch it also offers `dot-thermal setup` (power-profiles-daemon, plus thermald on Intel) -
+# without a power/thermal policy daemon nothing manages the CPU power state or the platform profile,
+# and the fans can't behave like they do on a polished OS. Skipped with --no-deps and in VMs.
 #
 # Re-running (= updating). ~/.local/share/hyprdot/manifest remembers a checksum of every file this
 # script installed. On the next run a file that is still exactly what was installed is simply
@@ -59,6 +64,7 @@ DRY_RUN=false
 WITH_DEPS=false
 ASSUME_YES=false
 NO_DEPS=false
+UNINSTALL=false
 PREFLIGHT_RETRY=false
 
 for arg in "$@"; do
@@ -67,6 +73,7 @@ for arg in "$@"; do
         -d|--with-deps) WITH_DEPS=true ;;
         -y|--yes)       ASSUME_YES=true ;;
         --no-deps)      NO_DEPS=true ;;
+        --uninstall)    UNINSTALL=true ;;
         -c|--copy)      MODE=copy ;;
         -l|--link)      MODE=link ;;
         -h|--help)
@@ -189,7 +196,7 @@ CORE_CHECKS=(
 # Not required to install, but the configs call them. Missing ones are listed.
 RECOMMENDED_BINS=(
     hyprlock hypridle hyprshutdown hyprsunset kitty playerctl brightnessctl wpctl
-    grim slurp satty wl-copy cliphist notify-send gsettings
+    grim slurp satty wl-copy cliphist notify-send gsettings powerprofilesctl
 )
 
 # Arch package names. CORE = the desktop can't start without it. EXTRA = programs the
@@ -204,9 +211,10 @@ PKGS_CORE=(
     grim slurp satty wl-clipboard cliphist jq
 )
 PKGS_EXTRA=(
-    hyprsunset hyprshutdown kitty btop nautilus firefox pavucontrol blueman wev
+    python hyprsunset hyprshutdown kitty btop nautilus firefox pavucontrol blueman wev
     pacman-contrib adw-gtk-theme noto-fonts-emoji ttf-jetbrains-mono-nerd bibata-cursor-theme
     dconf xdg-desktop-portal-gtk gsettings-desktop-schemas qt5ct qt6ct
+    power-profiles-daemon lm_sensors
 )
 
 NOCONFIRM=()
@@ -764,9 +772,74 @@ install_theming() {
     say ""
 }
 
+# Fans / power policy: power-profiles-daemon (+ thermald on Intel), fans back to automatic.
+install_thermal() {
+    [ -f "$BIN_SRC/dot-thermal" ] || return 0
+    say "=== Fans and power policy (dot-thermal) ==="
+    if $NO_DEPS; then
+        say "skipped (--no-deps). Later:  dot-thermal doctor   then   dot-thermal setup"
+    elif $DRY_RUN; then
+        say "would: dot-thermal setup --dry-run"
+        bash "$BIN_SRC/dot-thermal" setup --dry-run || true
+    else
+        local args=()
+        $ASSUME_YES && args+=(--yes)
+        bash "$BIN_SRC/dot-thermal" setup "${args[@]}" || warn "dot-thermal setup reported a problem (run: dot-thermal doctor)"
+    fi
+    say ""
+}
+
+# ---------------------------------------------------------------------------
+# Uninstall (copy installs): remove what the manifest lists, unless you changed it
+# ---------------------------------------------------------------------------
+
+uninstall() {
+    say "=== Uninstall ==="
+    if [ ! -f "$MANIFEST" ]; then
+        err "no manifest at $MANIFEST - nothing to uninstall (a --link install is removed by deleting its links)"
+        return 1
+    fi
+    ask "Remove the installed dotfiles (files you edited are kept)?" || { say "nothing removed"; return 0; }
+    load_manifest
+    local key sum target removed=0 kept=0 gone=0 dirs=()
+    while IFS= read -r key; do
+        case "$key" in
+            config/*) target="$DEST/${key#config/}" ;;
+            bin/*)    target="$BIN_DEST/${key#bin/}" ;;
+            data/*)   target="$DATA/${key#data/}" ;;
+            *) continue ;;
+        esac
+        sum="${MAN_OLD[$key]}"
+        if [ ! -e "$target" ] && [ ! -L "$target" ]; then gone=$((gone + 1)); continue; fi
+        if [ -f "$target" ] && [ ! -L "$target" ] && [ "$(sum_of "$target")" = "$sum" ]; then
+            say "remove     $key"
+            run rm -f -- "$target" && { removed=$((removed + 1)); dirs+=("$(dirname "$target")"); }
+        else
+            say "keep       $key   (changed since install)"
+            kept=$((kept + 1))
+        fi
+    done < <(printf '%s\n' "${!MAN_OLD[@]}" | sort)
+
+    # tidy up directories that are now empty (deepest first); never ~/.config or ~/.local/bin themselves
+    local d
+    while IFS= read -r d; do
+        [ -n "$d" ] && [ "$d" != "$DEST" ] && [ "$d" != "$BIN_DEST" ] && ! $DRY_RUN && rmdir -- "$d" 2>/dev/null
+    done < <(printf '%s\n' "${dirs[@]:-}" | sort -u | awk '{print length($0) " " $0}' | sort -rn | cut -d' ' -f2-)
+    if ! $DRY_RUN; then
+        rm -f -- "$MANIFEST"
+        find "$DATA" -depth -type d -empty -delete 2>/dev/null
+    fi
+    say ""
+    say "removed: $removed   kept (edited): $kept   already gone: $gone"
+    say "left alone on purpose: generated colour files, ~/.config/xcompose/vars, your wallpapers,"
+    say "  ~/.config-backup-* folders, and the packages. Restart Hyprland to drop the old session."
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+if $UNINSTALL; then uninstall; exit $?; fi
 
 $DRY_RUN && say "=== DRY RUN - nothing will be changed ==="
 
@@ -788,6 +861,7 @@ if [ "$MODE" = copy ]; then
 fi
 install_wallpapers
 install_theming
+install_thermal
 
 # Leftovers from the old Waybar/Rofi/Mako setup. Reported, never touched.
 stale=()
@@ -820,6 +894,7 @@ if ! $DRY_RUN && [ "$ERRORS" -eq 0 ]; then
     say ""
     say "Next:"
     say "  0. Black screen, no bar, or the wallpaper won't change? Run dot-doctor, then dot-wallpaper doctor."
+    say "  0b. Fans loud, hot, or not following the temperature? Run dot-thermal doctor (dot-thermal setup fixes the usual causes)."
     say "  1. Restart Hyprland (not a reload) so the screencopy permissions apply."
     say "  2. cp $DEST/xcompose/vars.example $DEST/xcompose/vars, edit it, run dot-restart-xcompose."
     say "  3. Colours switch from the placeholder palette at the first wallpaper change"
