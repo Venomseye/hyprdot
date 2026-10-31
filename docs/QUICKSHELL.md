@@ -33,9 +33,10 @@ config/quickshell/
 | clock: left | calendar (Esc, a click outside or 15 s closes it) |
 | menu -> Snippets / Emoji | copies text from `~/.config/xcompose/vars` (or an emoji) to the clipboard - paste with Ctrl+V |
 | bar: double-click empty space | toggle bar transparency |
+| menu -> Style -> Bar style | `classic` (flat full-width bar, the default), `floating` (one detached rounded bar) or `islands` (three rounded pills: left group, clock, right group). Remembered across restarts. `qs ipc call shell barstyle classic\|floating\|islands\|next` does the same from a keybind or script |
 | clock: left / right click | calendar with ISO weeks / cycle the format |
 | menu button: left / right | menu / terminal |
-| media: buttons / click / right-click | previous, play-pause, next buttons; click the pill = play-pause; right-click = next (see "Media player" below) |
+| media icon: left / middle / right / scroll | play-pause / next / open the player card in Quick settings / next-previous (see "Media player" below) |
 | updates: left / right | run the updater in a terminal / check now. Hidden while up to date; arrow + count = updates waiting, red triangle = check failed |
 | night light: left | toggle hyprsunset (moon = on, sun = off, dim = not installed; temperature in `theme/Style.qml`) |
 | microphone: left / scroll | mute-unmute (red slashed icon = muted) / input volume |
@@ -46,26 +47,25 @@ config/quickshell/
 | any bar icon | hover for a moment: tooltip with the current state and the click actions |
 | sliders icon / `Super+A` | quick settings: volume, mic, brightness sliders; Wi-Fi, Bluetooth, DND, night light, stay-awake and power-profile tiles; lists to switch audio output, join Wi-Fi, connect Bluetooth devices (lists scroll inside a fixed height; the whole panel scrolls if the screen is short) |
 | `Super+Shift+W` | wallpaper picker: thumbnails, arrows + Enter or click to apply; just type to filter by name (Esc clears it, then closes); Random applies a random one; Dark/Light and Style change the matugen scheme; "Rotate all" resumes rotation after pinning one |
+| `Super+/` | keybinds: every shortcut as a tile grouped by category with key caps; type to filter, Esc clears then closes. Read live from `bindings.lua` by `dot-keys --json` |
 | `Super+V` / `Super+C` | clipboard history / calculator, both inside the menu |
 | menu: mouse vs keyboard | the highlight follows whichever you used last; a menu opening under a resting pointer is not hijacked |
 
-IPC: `qs ipc call shell media playpause|play|pause|stop|next|previous`, `qs ipc call shell toggle menu|history|dnd|transparency|nightlight`, `qs ipc call shell menu System`, `qs ipc call shell refresh updates`,
+IPC: `qs ipc call shell media playpause|play|pause|stop|next|previous`, `qs ipc call shell toggle menu|history|dnd|transparency|nightlight|keys`, `qs ipc call shell menu System`, `qs ipc call shell refresh updates`,
 `qs ipc call shell show|hide menu|history`, `qs ipc call shell ping`.
 
 ## Media player
 
-The bar shows a pill whenever something is playing (it shortens its text to fit between the
-workspaces and the clock): the cover, "title - artist" and previous / play-pause / next buttons.
-Clicking the pill toggles play/pause, right-click skips to the next track; the scroll wheel does
-nothing. There is deliberately no player popup or seek bar.
+The bar shows one small music icon (in the right-hand group) whenever something is playing:
+left click = play/pause, middle click = next, scroll = next/previous, right click = open Quick
+settings, hover = "title - artist". Quick settings (`Super+A`) starts with the now-playing card:
+rounded cover, title, artist, a progress line with times (players that report a length) and previous / play-pause / next buttons. There is deliberately no seek bar.
 
 * Which player: a playing one, else the first. The media keys use the same choice
   (`qs ipc call shell media ...`, falling back to `playerctl` when the shell is down), and
   `playerctld` is no longer started - its proxy player only filled the Quickshell log with
   `NoActivePlayer` warnings.
-* Code: `services/NowPlaying.qml` (state) and `bar/Media.qml` (the pill). The previous one-line
-  widget is kept as `docs/legacy/Media.classic.qml`; to go back:
-  `cp docs/legacy/Media.classic.qml config/quickshell/bar/Media.qml && dot-reload shell`.
+* Code: `services/NowPlaying.qml` (state) and `bar/Media.qml` (the icon) and `quick/NowPlayingCard.qml` (the card).
 
 ## Performance notes
 

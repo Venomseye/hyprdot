@@ -5,9 +5,24 @@ generic wish list. **Effort**: S = under an hour, M = a few hours, L = a weekend
 **Confidence** says how sure I am the idea works as described; anything marked *needs testing*
 depends on behaviour I could not run here (there was no Hyprland or Quickshell to try it on).
 
+## Still pending (as of 2026-10-29.10)
+
+| # | Item | Why it is waiting |
+| --- | --- | --- |
+| 11 | Proportional UI font (keep mono for clocks and numbers) | A `Txt` change that touches every label; needs a look at real Quickshell first |
+| 13 | Notification grouping per app, per-app Do Not Disturb, history actions | The next notification step after persistent history |
+| 14 | More Quick settings tiles (VPN, screen recording, mic-in-use) | Needs hardware/services to test against |
+| 19 | More app templates (Firefox, VS Code, Discord, Zathura) | Each needs the app's own include/enable step |
+| 23 | CPU-only wallpaper fallback for VMs | Needs a VM to test |
+| 24 | Debian / Fedora package lists in `install.sh` | Package names must be checked on those distros |
+| 25 | Shell themes (named presets: bar style, radius, spacing, opacity, font) | Builds on 11 and the bar styles |
+| - | Real screenshots in the README | Needs your screen |
+
+Done since the first version of this file: 1-9, 10, 12, 15, 16, 17, 18, 20 (partly: the `scrolling` helpers stay), 21, 22, `--uninstall`.
+
 ## 1. Reliability - make breakage impossible or at least obvious
 
-**Status (version 2026-10-19.2): items 1-5 are done, 6 exists as an experimental option. Item 4 is now mostly moot: the installer copies by default, so nothing depends on where the repo lives (the warning remains for `--link`). Still missing: `install.sh --uninstall`.**
+**Status (version 2026-10-19.2): items 1-5 are done, 6 exists as an experimental option. Item 4 is now mostly moot: the installer copies by default, so nothing depends on where the repo lives (the warning remains for `--link`). `install.sh --uninstall` now exists (2026-10-29.10).**
 1 = `dot-check` + the safety net in `dot-reload`; 2 = `tests/` and `.github/workflows/check.yml`;
 3 = power profiles and the Wi-Fi tile (see `docs/TROUBLESHOOTING.md`); 4 = `install.sh` and
 `dot-doctor` warn about Downloads/tmp; 5 = `dot-reload` trims `quickshell.log` to its last 64 KB;
@@ -44,30 +59,31 @@ Not confirmed on real hardware yet: that `dbus-monitor --system` may receive Blu
 
 | # | Idea | Why | Effort |
 | --- | --- | --- | --- |
-| 10 | **One global UI scale.** Sizes are fixed pixel constants (bar 34, fonts 13-14, icons 16, card widths 360-420). Add `Style.scale` and multiply, ideally tied to the monitor scale. | "Everything looks tiny" came up first and was fixed by editing many numbers. A single knob would have been one edit. | M |
+| 10 | **DONE (2026-10-29.10): `dot-ui-scale` / menu -> Style -> UI size sets `QT_SCALE_FACTOR` for Quickshell only. Not yet run on real Quickshell; if some panel clips at 130%+, tell me which.** **One global UI scale.** Sizes are fixed pixel constants (bar 34, fonts 13-14, icons 16, card widths 360-420). Add `Style.scale` and multiply, ideally tied to the monitor scale. | "Everything looks tiny" came up first and was fixed by editing many numbers. A single knob would have been one edit. | M |
 | 11 | **A proportional UI font.** The whole shell is monospace, which makes labels wide (the media pill needed a width budget, "Wallpapers" did not fit its tile). Keep mono for clocks and numbers. | Several truncation bugs came from monospace widths. | S |
-| 12 | **Optional floating-islands bar.** Left, centre and right groups as separate rounded pills, matching the media pill. | The pill looks more polished than the flat bar around it. A style choice: only if you like it. | M |
-| 13 | **Notification upgrades.** Action buttons, grouping per app, history that survives a shell restart, per-app Do Not Disturb. | Notifications are basic: last ten, in memory. | M |
+| 12 | **DONE (2026-10-29.6): `classic` stays the default, `floating` and `islands` are options in menu -> Style -> Bar style; not yet run on real Quickshell.** **Optional floating-islands bar.** Left, centre and right groups as separate rounded pills, matching the media pill. | The pill looks more polished than the flat bar around it. A style choice: only if you like it. | M |
+| 13 | **PARTLY DONE: action buttons already worked in the daemon and toasts; history now survives restarts (2026-10-29.10). Still open: grouping per app, per-app Do Not Disturb, actions inside the history list.** **Notification upgrades.** Action buttons, grouping per app, history that survives a shell restart, per-app Do Not Disturb. | Notifications are basic: last ten, in memory. | M |
 | 14 | **More Quick settings:** VPN, screen recording, microphone-in-use indicator. | Common needs not covered. | M |
-| 15 | **Screenshot follow-up.** Notification actions: open, edit, copy path. | Today it only says "saved". | S |
-| 16 | **A keybind cheat sheet** generated from `bindings.lua` and shown in the menu, plus a duplicate-bind check. | `KEYBINDINGS.md` is written by hand and can drift. | M |
+| 15 | **DONE (2026-10-29.10): the screenshot notification has Open / Edit / Copy path buttons.** **Screenshot follow-up.** Notification actions: open, edit, copy path. | Today it only says "saved". | S |
+| 16 | **DONE (2026-10-29.7, `dot-keys`, menu -> Keybinds, duplicate check).** **A keybind cheat sheet** generated from `bindings.lua` and shown in the menu, plus a duplicate-bind check. | `KEYBINDINGS.md` is written by hand and can drift. | M |
 
 ## 4. Theming
 
 | # | Idea | Why | Effort |
 | --- | --- | --- | --- |
-| 17 | **Fix the terminal palette at the source.** The kitty/ghostty templates put light pastels in almost every ANSI slot, so any program using ANSI colours can come out unreadable: nmtui measured 1.00:1 contrast. The `NEWT_COLORS` / `NMT_NEWT_COLORS` settings are a workaround for one program. Generate ANSI 0-7 so they contrast with the background, or at least add a contrast check to `dot-theme doctor`. | nmtui; btop, htop, git diff and others are likely affected. | M |
-| 18 | **`dot-theme init` respects light mode.** It forces the dark preference and writes a new Qt config backup on every run. | Seen when reading the script. | S |
+| 17 | **DONE (2026-10-29.5, `dot-contrast`; untested against real matugen output).** **Fix the terminal palette at the source.** The kitty/ghostty templates put light pastels in almost every ANSI slot, so any program using ANSI colours can come out unreadable: nmtui measured 1.00:1 contrast. The `NEWT_COLORS` / `NMT_NEWT_COLORS` settings are a workaround for one program. Generate ANSI 0-7 so they contrast with the background, or at least add a contrast check to `dot-theme doctor`. | nmtui; btop, htop, git diff and others are likely affected. | M |
+| 18 | **DONE (2026-10-29.5).** **`dot-theme init` respects light mode.** It forces the dark preference and writes a new Qt config backup on every run. | Seen when reading the script. | S |
 | 19 | **More app templates** (Firefox, VS Code, Discord, Zathura) - matugen supports them. | Apps outside the current list stay un-themed. | S each |
 
 ## 5. Housekeeping
 
 | # | Idea | Why | Effort |
 | --- | --- | --- | --- |
-| 20 | **Remove dead code:** the `scrolling` layout helpers in `bindings.lua` and the `scrolling` block in `looknfeel.lua` (workspace 2 no longer uses it), `docs/legacy/Media.classic.qml` once you are happy with the pill, leftover "ML4W" headings. | Less to read and break. | S |
-| 21 | **A real README:** screenshots, a requirements table per feature, an update procedure, `install.sh --uninstall`. | The README is a command list. | S |
-| 22 | **A CHANGELOG** next to `VERSION`. | Doctor reports now show which copy is installed; they should also say what changed between copies. | S |
+| 20 | **PARTLY DONE (2026-10-29.5): legacy Media widget and ML4W headings removed; the `scrolling` helpers in `bindings.lua` stay because they still drive the arrow keys on any scrolling workspace.** **Remove dead code:** the `scrolling` layout helpers in `bindings.lua` and the `scrolling` block in `looknfeel.lua` (workspace 2 no longer uses it), `docs/legacy/Media.classic.qml` once you are happy with the pill, leftover "ML4W" headings. | Less to read and break. | S |
+| 21 | **DONE (2026-10-29.10): README rewritten (features, requirements, install/update/uninstall, tools). Screenshots still missing: add your own.** **A real README:** screenshots, a requirements table per feature, an update procedure, `install.sh --uninstall`. | The README is a command list. | S |
+| 22 | **DONE (2026-10-29.5, `CHANGELOG.md`).** **A CHANGELOG** next to `VERSION`. | Doctor reports now show which copy is installed; they should also say what changed between copies. | S |
 | 23 | **VM fallback for wallpapers.** wpaperd needs OpenGL. When software rendering is detected, use a CPU-only wallpaper tool. | The VM reports in this session had no usable GPU. *Needs testing in a VM.* | M |
+| 25 | **Shell themes.** Whole-shell looks (bar style, radius, spacing, panel opacity, font) bundled as named presets and switched from the menu, on top of the wallpaper colours. | Planned after the remaining items; builds on the bar styles above. | M-L |
 | 24 | **Other distros.** `install.sh` installs packages on Arch only; add Debian/Fedora package lists. | `dot-updates` already knows six distros; the installer does not. | M |
 
 ## Not verified in this session

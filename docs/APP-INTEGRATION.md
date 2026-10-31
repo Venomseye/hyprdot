@@ -40,11 +40,20 @@ configuration" action, or enable the optional SIGUSR2 reload described in
 Needs `adw-gtk-theme` installed and selected (the reload hook sets
 `adw-gtk3-dark`). GTK4/libadwaita apps only read this at startup.
 
-## btop - `~/.config/btop/btop.conf`
+## btop - automatic
+
+`dot-theme init` (run by `install.sh` and by Menu -> Setup -> Fix dark mode in apps) sets two keys in
+`~/.config/btop/btop.conf` and leaves the rest alone (a backup is made if anything changes):
 
 ```conf
 color_theme = "matugen"
+theme_background = False
 ```
+
+The first selects the theme matugen generates on every wallpaper change; the second lets the
+translucent kitty background show through instead of a solid black box. btop reads the theme at
+launch, so reopen it after a wallpaper change. Close btop before running `dot-theme init`: btop
+rewrites its own config when it exits and would put the old values back.
 
 ## hyprlock
 

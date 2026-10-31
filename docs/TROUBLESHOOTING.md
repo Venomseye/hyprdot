@@ -193,12 +193,11 @@ QApplication mode.` Tray menus need a QApplication, which `shell.qml` now reques
 `//@ pragma UseQApplication` on its first line (needs `qt6-base`, which is always present
 with Quickshell). Restart it once: `dot-reload shell`.
 
-## Media pill missing
+## Media icon / card missing
 
-The pill only shows while a player reports a track title over MPRIS (Spotify, Firefox/Chromium
+The bar icon and the Quick settings card only show while a player reports a track title over MPRIS (Spotify, Firefox/Chromium
 tabs, mpv with mpv-mpris, ...). Check with `playerctl -l` and `qs ipc call shell media playpause`.
-If the shell fails to load after an update, `qs` in a terminal prints the file and line; the old
-widget is `docs/legacy/Media.classic.qml`.
+If the shell fails to load after an update, `qs` in a terminal prints the file and line.
 
 ## nmtui (or whiptail) colours are unreadable
 
@@ -284,6 +283,73 @@ hyprctl getoption decoration:blur:enabled     # check what is active
 
 The real fix in a VM is 3D acceleration (virtio-gpu with virgl, or GPU passthrough).
 
+## btop / nmtui / pavucontrol / the updater float but are small
+
+Hyprland's Lua config does **not** understand percentage sizes like `size = "60% 70%"` (that was the
+old hyprlang syntax). Such a rule is silently ignored and the window keeps its default size
+(kitty: 640x400 px). `size` needs numbers or expressions; `hypr/rules.lua` has a `pct(w, h)` helper
+that produces `{ "(monitor_w*0.w)", "(monitor_h*0.h)" }`, and `dot-check` fails if a percentage
+size sneaks back in. To change a window's size edit its numbers, e.g. `float_tool("btop", 96, 92)`
+(96% x 92% of the monitor's logical size = resolution / scale).
+
+After editing: `hyprctl reload`, then reopen the window (rules apply when a window opens).
+Useful when something is off:
+
+```bash
+hyprctl configerrors                            # Lua errors in the config
+hyprctl clients | grep -B3 -A14 "dot-btop"      # class: dot-btop, floating: 1, size: W,H
+hyprctl monitors | grep -E "Monitor| at |scale" # logical size = resolution / scale
+```
+
+## btop shows its default colours
+
+`btop.conf` must say `color_theme = "matugen"`. `dot-theme init` writes that now (close btop first,
+it rewrites its config on exit); `dot-theme doctor` tells you which part is missing, including the
+generated theme file itself (it appears after the first wallpaper change, `Super+Ctrl+W`).
+
+## Fans loud, machine hot, or fans not following the temperature
+
+```bash
+dot-thermal doctor     # sensors, fan modes, power policy, services, busy processes -> "Likely problems"
+dot-thermal setup      # installs/enables power-profiles-daemon (+ thermald on Intel); asks first, --dry-run to preview
+dot-thermal watch      # live temperature / RPM / frequency while you test
+```
+
+On most laptops the firmware runs the fan curve itself; Linux only chooses a policy. What this repo
+was missing was the policy layer, so the usual causes are:
+
+| Finding | Meaning | Fix |
+| --- | --- | --- |
+| power-profiles-daemon not installed/running | nothing manages the CPU power state or platform profile; the Quick settings power tile is hidden | `dot-thermal setup` |
+| thermald missing (Intel only) | no gentle thermal limiting before the hard throttle | `dot-thermal setup` |
+| platform profile or ppd = `performance` | hotter and louder on purpose | `powerprofilesctl set balanced` |
+| fan `pwmN_enable` = 1 with no fan controller, or 0 | a tool left the fan fixed / at full speed | `dot-thermal setup` (writes 2 = automatic) or reboot |
+| tlp or auto-cpufreq AND power-profiles-daemon | they overwrite each other | keep one: `sudo systemctl disable --now tlp` |
+| a process using most of a core | the fan is answering real load | `btop`, close or fix it |
+| throttle events since boot | cooling can't keep up | dust, thermal paste, fan curve |
+| discrete GPU awake, driving no monitor | a dGPU that never sleeps is a common heat/fan/battery drain on hybrid laptops (it is *expected* while it drives an HDMI/DP monitor: `doctor` says so and does not flag that) | `doctor` names the process holding it; for Hyprland itself put the integrated GPU first with `AQ_DRM_DEVICES=/dev/dri/by-path/pci-<addr>-card` (`doctor` prints your path) in `hypr/autostart.lua`, restart Hyprland |
+| GPU `power/control` = on, or clocks forced (`power_dpm_force_performance_level` not `auto`) | the GPU can't sleep / is held at high clocks | `echo auto \| sudo tee <the file doctor prints>`, then find what set it (tlp, corectrl, a udev rule) |
+| no fan sensor at all | usually fine (firmware controls it); a model driver may be needed for control | see the hint `doctor` prints (thinkpad_acpi, dell-smm-hwmon, asus-nb-wmi, nbfc-linux) |
+
+In a VM it says so and stops: the fans belong to the host.
+
+### Battery charge limit
+
+If you are plugged in most of the time, keeping the battery at 100% wears it faster. Cap it:
+
+```bash
+dot-thermal battery          # show the current limit (and whether this laptop supports one)
+dot-thermal battery 80       # stop charging at 80% (allowed: 50-100); asks, uses sudo
+dot-thermal battery off      # back to 100%
+```
+
+This writes `charge_control_end_threshold` and installs `dot-charge-limit.service`, so the limit is
+re-applied at boot and after suspend/hibernate (some firmware forgets it). Menu: Setup -> Battery.
+A battery already above the limit stays there until it discharges. If `dot-thermal battery`
+says the limit is "not exposed", this kernel/firmware has no such control: look for "battery care",
+"battery health" or "conservation mode" in the BIOS/UEFI or the vendor's tool. Some laptops only
+accept fixed values (often 60/80/100); the command warns when the kernel refuses one.
+
 ## Suspend / idle uses a lot of power
 
 First find out WHICH problem you have:
@@ -349,3 +415,37 @@ sudo systemctl disable --now samba     # file sharing uses smb + nmb, not this o
 `dot-doctor` now lists failed services. Logout also ends only your current session
 (`loginctl terminate-session`) instead of `terminate-user`, which killed every session and
 service you own.
+
+## Terminal text is too faint to read
+
+`dot-contrast --check` prints every ANSI colour's contrast against the background. After each
+wallpaper change the hook runs `dot-contrast`, which lightens (dark scheme) or darkens (light
+scheme) only the colours below 4.5:1 (colour 8: 3:1). Run it by hand to re-apply: `dot-contrast`.
+
+## Panels feel slow to open
+
+`dot-perf` times every panel and shows which GPU Hyprland and Quickshell render on. Panels animate
+in QML (130 ms in, 80 ms out); Hyprland's own layer animations are off on purpose (`hypr/looknfeel.lua`),
+and `ignore_alpha` in `hypr/rules.lua` keeps the dimming scrim from triggering a full-screen blur.
+`touch ~/.config/hypr/low-effects` turns blur, shadows and animations off to test.
+
+## Different wallpaper on each monitor
+
+wpaperd chooses an image per display when its config points at a folder, and then only one display
+drives the colours. The config now points at ONE image and `dot-wallpaper` changes it for all
+displays (next/prev, the picker, and the `daemon` timer behind `dot-wallpaper rotate [minutes]`).
+An old folder config is converted at the next login; to do it now: `dot-wallpaper sync`.
+`dot-wallpaper doctor` warns while a folder path is still configured. Picking a wallpaper in the
+picker pins it (automatic changes off); `dot-wallpaper rotate` turns them back on.
+
+## The screen stays on when idle or locked
+
+`hypr/hypridle.conf` now dims at 3 min, locks at 5, suspends at 10 min on battery and at 20 min on
+mains power (`dot-power idle-suspend`). The word in `~/.config/hypr/idle-action` picks what happens:
+`suspend` (default), `hibernate`, `suspend-then-hibernate` or `none`. Hibernate needs swap and a
+`resume=` kernel setup; when `systemctl can-hibernate` is not "yes" it suspends instead. If you edited
+your own `hypridle.conf`, the installer keeps it: copy the two `idle-suspend` listeners from the repo
+copy (`~/.local/share/hyprdot/` has none; see `config/hypr/hypridle.conf` in the checkout), then
+`pkill hypridle; hypridle &`. Check it works: `dot-power idle-suspend any` suspends right now.
+Turning the panel off while merely locked (DPMS) is still the commented OPTIONAL block there: it is
+the part of Hyprland most likely to misbehave with an external monitor.

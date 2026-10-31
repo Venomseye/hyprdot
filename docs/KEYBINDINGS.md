@@ -3,10 +3,13 @@
 `Super` is the main modifier. There are **no submaps** any more (while one is
 active every other key is swallowed, and nothing showed that it was on).
 
+`dot-keys` prints the live list straight from `bindings.lua` (menu -> Keybinds); this page explains it.
+
 ## Everyday
 
 | Keys | Action |
 | --- | --- |
+| `Super+/` | every keybind as tiles, grouped, with a filter (menu -> Keybinds; generated from `bindings.lua`) |
 | `Super+Space` | menu: apps and commands (Esc closes, Enter runs) |
 | `Super+Return` | terminal |
 | `Super+B` / `Super+E` | browser / file manager |
