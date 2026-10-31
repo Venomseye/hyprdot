@@ -74,4 +74,20 @@ fi
 
 grim "${args[@]}" "$file" || die "grim failed"
 have wl-copy && wl-copy <"$file"
-note -a screenshot -i "$file" "Screenshot saved" "$(basename "$file")"
+# Notification with buttons (Open / Edit / Copy path). notify-send --wait prints the button that was
+# pressed, so a detached subshell waits for it; the script itself returns at once. Older libnotify
+# without --wait/--action just gets the plain notification.
+if have notify-send && notify-send --help 2>&1 | grep -q -- '--wait' && notify-send --help 2>&1 | grep -q -- '--action'; then
+    (
+        act="$(notify-send -a screenshot -i "$file" -A open=Open -A edit=Edit -A path="Copy path" -w \
+            "Screenshot saved" "$(basename "$file")" 2>/dev/null)"
+        case "$act" in
+            open) have xdg-open && xdg-open "$file" ;;
+            edit) have satty && satty --filename "$file" --output-filename "$file" ;;
+            path) have wl-copy && printf %s "$file" | wl-copy ;;
+        esac
+    ) >/dev/null 2>&1 </dev/null &
+    disown 2>/dev/null || true
+else
+    note -a screenshot -i "$file" "Screenshot saved" "$(basename "$file")"
+fi
