@@ -1,6 +1,6 @@
 -- Look and feel: gaps, borders, rounding, blur, animations, layouts, misc.
 --
--- Visual standard: 5px inner / 10px outer gaps, 2px border (ML4W uses 2px since 2.9.9.3),
+-- Visual standard: 5px inner / 10px outer gaps, 2px border,
 -- 10px rounding, active border = matugen primary, blur passes = 3.
 
 ------------------------
@@ -69,7 +69,7 @@ hl.config({
 		rounding_power = 2,
 
 		active_opacity = 1.0,
-		inactive_opacity = 0.95,
+		inactive_opacity = 1.0, -- <1 makes every unfocused window translucent = blurred behind it, every frame
 
 		shadow = {
 			enabled = true,
@@ -80,9 +80,10 @@ hl.config({
 
 		blur = {
 			enabled = true,
-			size = 3,
-			passes = 3,
+			size = 4,
+			passes = 2,
 			vibrancy = 0.1696,
+			xray = true, -- blur the wallpaper only, not the windows below: much cheaper
 		},
 	},
 
@@ -146,30 +147,36 @@ end
 
 -- See https://wiki.hypr.land/Configuring/Advanced-and-Cool/Animations/
 hl.curve("easeOutQuint", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
-hl.curve("easeInOutCubic", { type = "bezier", points = { { 0.65, 0.05 }, { 0.36, 1 } } })
+hl.curve("easeOutExpo", { type = "bezier", points = { { 0.16, 1 }, { 0.3, 1 } } })
+hl.curve("easeInQuad", { type = "bezier", points = { { 0.55, 0.085 }, { 0.68, 0.19 } } })
 hl.curve("linear", { type = "bezier", points = { { 0, 0 }, { 1, 1 } } })
-hl.curve("almostLinear", { type = "bezier", points = { { 0.5, 0.5 }, { 0.75, 1 } } })
 hl.curve("quick", { type = "bezier", points = { { 0.15, 0 }, { 0.1, 1 } } })
 
-hl.curve("easy", { type = "spring", mass = 1, stiffness = 71.2633, dampening = 15.8273644 })
-
+-- Speeds are in units of 100 ms: 2.2 = 220 ms. Opening is fast with a soft landing (ease-out),
+-- closing is faster still, so nothing ever makes you wait.
 hl.animation({ leaf = "global", enabled = true, speed = 10, bezier = "default" })
-hl.animation({ leaf = "border", enabled = true, speed = 5.39, bezier = "easeOutQuint" })
-hl.animation({ leaf = "windows", enabled = true, speed = 4.79, spring = "easy" })
-hl.animation({ leaf = "windowsIn", enabled = true, speed = 4.1, spring = "easy", style = "popin 87%" })
-hl.animation({ leaf = "windowsOut", enabled = true, speed = 1.49, bezier = "linear", style = "popin 87%" })
-hl.animation({ leaf = "fadeIn", enabled = true, speed = 1.73, bezier = "almostLinear" })
-hl.animation({ leaf = "fadeOut", enabled = true, speed = 1.46, bezier = "almostLinear" })
-hl.animation({ leaf = "fade", enabled = true, speed = 3.03, bezier = "quick" })
-hl.animation({ leaf = "layers", enabled = true, speed = 3.81, bezier = "easeOutQuint" })
-hl.animation({ leaf = "layersIn", enabled = true, speed = 4, bezier = "easeOutQuint", style = "fade" })
-hl.animation({ leaf = "layersOut", enabled = true, speed = 1.5, bezier = "linear", style = "fade" })
-hl.animation({ leaf = "fadeLayersIn", enabled = true, speed = 1.79, bezier = "almostLinear" })
-hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1.39, bezier = "almostLinear" })
-hl.animation({ leaf = "workspaces", enabled = true, speed = 1.94, bezier = "almostLinear", style = "fade" })
-hl.animation({ leaf = "workspacesIn", enabled = true, speed = 1.21, bezier = "almostLinear", style = "fade" })
-hl.animation({ leaf = "workspacesOut", enabled = true, speed = 1.94, bezier = "almostLinear", style = "fade" })
-hl.animation({ leaf = "zoomFactor", enabled = true, speed = 7, bezier = "quick" })
+hl.animation({ leaf = "border", enabled = true, speed = 4, bezier = "easeOutQuint" })
+hl.animation({ leaf = "borderangle", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "windows", enabled = true, speed = 2.6, bezier = "easeOutExpo" })
+hl.animation({ leaf = "windowsIn", enabled = true, speed = 2.6, bezier = "easeOutExpo", style = "popin 82%" })
+hl.animation({ leaf = "windowsOut", enabled = true, speed = 1.6, bezier = "easeInQuad", style = "popin 90%" })
+hl.animation({ leaf = "fade", enabled = true, speed = 2, bezier = "quick" })
+hl.animation({ leaf = "fadeIn", enabled = true, speed = 2, bezier = "easeOutQuint" })
+hl.animation({ leaf = "fadeOut", enabled = true, speed = 1.4, bezier = "easeInQuad" })
+hl.animation({ leaf = "fadeSwitch", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "workspaces", enabled = true, speed = 2.4, bezier = "easeOutExpo", style = "slide" })
+hl.animation({ leaf = "specialWorkspace", enabled = true, speed = 2.4, bezier = "easeOutExpo", style = "slidevert" })
+hl.animation({ leaf = "zoomFactor", enabled = true, speed = 5, bezier = "quick" })
+
+-- Quickshell panels (menu, quick settings, OSD, calendar, toasts) animate themselves in QML.
+-- Hyprland's own layer fade used to run on top of that (~400 ms) and was the main reason the
+-- menu felt slow to open, so it is off. The bar is a layer too, but it only maps once.
+hl.animation({ leaf = "layers", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "layersIn", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "layersOut", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "fadeLayers", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "fadeLayersIn", enabled = false, speed = 1, bezier = "linear" })
+hl.animation({ leaf = "fadeLayersOut", enabled = false, speed = 1, bezier = "linear" })
 
 ------------------
 ---- LAYOUTS -----
