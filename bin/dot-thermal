@@ -1,0 +1,783 @@
+#!/usr/bin/env bash
+#
+# dot-thermal - fans, temperatures and CPU power policy: why are the fans loud / not reacting?
+#
+#   dot-thermal status        temperatures, fan speeds, power policy, services, what is using the CPU
+#                             (read-only)
+#   dot-thermal doctor        the same, then a "Likely problems" list with the exact fix (read-only)
+#   dot-thermal watch         a compact live view, refreshed every 2 s (Ctrl+C stops)
+#   dot-thermal battery       charge limit: show it, `battery 80` caps charging at 80% (less battery
+#                             wear if you are plugged in most of the time), `battery off` removes it.
+#                             Applied now AND at every boot/resume (a small systemd unit).
+#   dot-thermal setup         fix what can be fixed safely: install + enable power-profiles-daemon
+#                             (and thermald on Intel), and hand fans that were left in manual mode
+#                             back to the firmware/driver. Asks before every step.
+#       --yes                 answer yes to every question
+#       --dry-run             print what it would do, change nothing
+#
+# How fan control works on Linux (so the output makes sense):
+#   * Almost every laptop: the embedded controller (EC) runs the fan curve ITSELF. Linux only picks
+#     a policy (platform profile: quiet / balanced / performance). Nothing in userspace has to "drive"
+#     the fan, but something has to manage that policy and the CPU power state:
+#     power-profiles-daemon (all vendors), thermald (Intel). Without them the CPU runs on kernel
+#     defaults (which favour speed over heat) and nothing can switch to a quieter profile, so the
+#     machine runs warmer and the EC fan curve has to work harder.
+#   * Desktops and a few laptops: the kernel exposes the fan as pwmN/fanN_input; the BIOS curve
+#     applies unless a tool (fancontrol, CoolerControl, nbfc, a script) switched the fan to manual
+#     and then exited. That leaves it stuck at one speed, regardless of temperature.
+#   * Some laptops need a model driver (thinkpad_acpi, dell-smm-hwmon, asus-nb-wmi, nbfc ...) to
+#     be controllable at all.
+#
+# This script never writes a fan speed. The only sysfs writes it can do, after asking and with sudo,
+# are: a pwmN_enable from "manual"/"full speed" back to "automatic" (setup), and the battery's
+# charge_control_end_threshold (battery).
+#
+# Testing: DOT_SYS (/sys), DOT_CPUINFO (/proc/cpuinfo), DOT_PROC (/proc), DOT_UNIT_DIR
+# (/etc/systemd/system) can point at fake trees.
+
+set -uo pipefail
+
+SYS="${DOT_SYS:-/sys}"
+CPUINFO="${DOT_CPUINFO:-/proc/cpuinfo}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+rd()   { cat "$1" 2>/dev/null || true; }
+sec()  { printf '\n== %s ==\n' "$*"; }
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'warn: %s\n' "$*" >&2; }
+err()  { printf 'error: %s\n' "$*" >&2; }
+
+problems=()
+problem() { problems+=("$*"); }
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+in_vm() {
+    have systemd-detect-virt || return 1
+    local v
+    v="$(systemd-detect-virt --vm 2>/dev/null || true)"
+    [ -n "$v" ] && [ "$v" != none ]
+}
+
+cpu_vendor() { # intel | amd | other
+    case "$(grep -m1 '^vendor_id' "$CPUINFO" 2>/dev/null)" in
+        *GenuineIntel*) echo intel ;;
+        *AuthenticAMD*) echo amd ;;
+        *) echo other ;;
+    esac
+}
+
+dmi() { rd "$SYS/class/dmi/id/$1" | head -n 1; }
+
+mod_loaded() { grep -q "^${1} " "${DOT_MODULES:-/proc/modules}" 2>/dev/null; }
+yesno() { if "$@"; then echo yes; else echo no; fi; }
+
+has_battery() {
+    local b
+    for b in "$SYS"/class/power_supply/BAT*; do [ -e "$b" ] && return 0; done
+    return 1
+}
+
+on_battery() { # true when a battery exists and no mains supply is online
+    has_battery || return 1
+    local s
+    for s in "$SYS"/class/power_supply/*; do
+        [ -r "$s/type" ] || continue
+        case "$(rd "$s/type")" in
+            Mains|USB*) [ "$(rd "$s/online")" = 1 ] && return 1 ;;
+        esac
+    done
+    return 0
+}
+
+svc_installed() { have systemctl && systemctl list-unit-files "$1.service" --no-legend 2>/dev/null | grep -q "^$1\.service"; }
+svc_active()    { have systemctl && systemctl is-active --quiet "$1" 2>/dev/null; }
+svc_enabled()   { have systemctl && systemctl is-enabled --quiet "$1" 2>/dev/null; }
+
+# Userspace fan controllers. If one of these runs, a fan in "manual" mode is expected.
+FAN_DAEMONS=(fancontrol coolercontrold nbfc_service thinkfan fan2go)
+active_fan_daemon() {
+    local d
+    for d in "${FAN_DAEMONS[@]}"; do
+        if svc_active "$d"; then echo "$d"; return 0; fi
+        if pgrep -x "$d" >/dev/null 2>&1; then echo "$d"; return 0; fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# sections (each prints what it sees and records problems)
+# ---------------------------------------------------------------------------
+
+cpu_temp=0       # hottest CPU sensor, whole degrees C
+fans_seen=0
+fan_max_rpm=0
+
+section_machine() {
+    sec "machine"
+    say "  $(dmi sys_vendor) $(dmi product_name) $(dmi product_version | sed 's/^None$//')   (BIOS $(dmi bios_version))"
+    say "  cpu: $(grep -m1 'model name' "$CPUINFO" 2>/dev/null | sed 's/.*: *//')   [$(cpu_vendor)]"
+    say "  type: $(has_battery && echo laptop || echo desktop/no battery), power: $(on_battery && echo battery || echo mains)"
+    say "  kernel: $(uname -r)"
+}
+
+section_temps() {
+    sec "temperatures"
+    local h name t lbl v c n=0 z
+    for h in "$SYS"/class/hwmon/hwmon*; do
+        [ -d "$h" ] || continue
+        name="$(rd "$h/name")"
+        for t in "$h"/temp*_input; do
+            [ -r "$t" ] || continue
+            v="$(rd "$t")"
+            case "$v" in ''|*[!0-9-]*) continue ;; esac
+            c=$((v / 1000))
+            [ "$c" -gt 0 ] && [ "$c" -lt 130 ] || continue
+            lbl="$(rd "${t%_input}_label")"
+            printf '  %-14s %-20s %3d C\n' "$name" "${lbl:-${t##*/}}" "$c"
+            n=$((n + 1))
+            case "$name" in
+                coretemp|k10temp|zenpower|cpu_thermal|acpitz)
+                    [ "$c" -gt "$cpu_temp" ] && cpu_temp="$c" ;;
+            esac
+        done
+    done
+    for z in "$SYS"/class/thermal/thermal_zone*; do
+        [ -d "$z" ] || continue
+        v="$(rd "$z/temp")"
+        case "$v" in ''|*[!0-9-]*) continue ;; esac
+        c=$((v / 1000))
+        [ "$c" -gt 0 ] && [ "$c" -lt 130 ] || continue
+        printf '  %-14s %-20s %3d C\n' "zone:$(rd "$z/type")" "${z##*/}" "$c"
+        n=$((n + 1))
+        case "$(rd "$z/type")" in
+            x86_pkg_temp|acpitz|cpu*|CPU*) [ "$c" -gt "$cpu_temp" ] && cpu_temp="$c" ;;
+        esac
+    done
+    if [ "$n" -eq 0 ]; then
+        say "  no temperature sensors visible"
+        problem "no temperature sensors are exposed to Linux (nothing under $SYS/class/hwmon or thermal_zone). Fan control cannot react to what it cannot read: update the kernel/BIOS, and for a desktop board run 'sudo sensors-detect' (package lm_sensors) to find the chip driver"
+    else
+        say "  -> hottest CPU sensor: ${cpu_temp} C"
+    fi
+}
+
+section_fans() {
+    sec "fans"
+    local h name f rpm lbl p val en mode daemon
+    daemon="$(active_fan_daemon || true)"
+    for h in "$SYS"/class/hwmon/hwmon*; do
+        [ -d "$h" ] || continue
+        name="$(rd "$h/name")"
+        for f in "$h"/fan*_input; do
+            [ -r "$f" ] || continue
+            rpm="$(rd "$f")"
+            case "$rpm" in ''|*[!0-9]*) continue ;; esac
+            lbl="$(rd "${f%_input}_label")"
+            printf '  %-14s %-20s %5d RPM\n' "$name" "${lbl:-${f##*/}}" "$rpm"
+            fans_seen=$((fans_seen + 1))
+            [ "$rpm" -gt "$fan_max_rpm" ] && fan_max_rpm="$rpm"
+        done
+        for p in "$h"/pwm[0-9]*; do
+            [ -e "$p" ] || continue
+            case "${p##*/}" in *_*) continue ;; esac
+            val="$(rd "$p")"; en="$(rd "${p}_enable")"
+            case "$en" in
+                0) mode="NO CONTROL = full speed" ;;
+                1) mode="MANUAL (fixed at pwm $val/255)" ;;
+                '') mode="mode unknown (no ${p##*/}_enable)" ;;
+                *) mode="automatic (mode $en)" ;;
+            esac
+            printf '  %-14s %-20s %s\n' "$name" "${p##*/}" "$mode"
+            case "$en" in
+                0)
+                    problem "$name ${p##*/}: fan control is 0, which the kernel defines as 'no speed control, fan at full speed'. Some tool or a BIOS setting disabled the automatic curve. Fix: dot-thermal setup (hands it back to automatic; a reboot also resets it)"
+                    ;;
+                1)
+                    if [ -n "$daemon" ]; then
+                        say "      (manual is expected: $daemon is running and drives this fan)"
+                    else
+                        problem "$name ${p##*/}: the fan is in MANUAL mode at a fixed pwm ($val/255) and no fan controller (${FAN_DAEMONS[*]}) is running, so it ignores temperature. Something set it and exited. Fix: dot-thermal setup (hands it back to automatic) - or start the controller you meant to use"
+                    fi
+                    ;;
+            esac
+        done
+    done
+    for f in "$SYS"/class/thermal/cooling_device*; do
+        [ -d "$f" ] || continue
+        case "$(rd "$f/type")" in Fan|fan) ;; *) continue ;; esac
+        printf '  %-14s %-20s state %s / %s\n' "acpi-fan" "${f##*/}" "$(rd "$f/cur_state")" "$(rd "$f/max_state")"
+    done
+
+    if [ "$fans_seen" -eq 0 ]; then
+        say "  no fan speed sensor is exposed."
+        say "  That is normal when the firmware runs the fan on its own - it only means Linux can't show the RPM."
+        fan_driver_hint
+    elif [ "$cpu_temp" -ge 75 ] && [ "$fan_max_rpm" -eq 0 ]; then
+        problem "the CPU is at ${cpu_temp} C but every fan reads 0 RPM. Either the fan is stopped/failed (check it physically; on some laptops 0 RPM is only valid below ~60 C) or the wrong sensor is exposed"
+    fi
+}
+
+fan_driver_hint() {
+    local vendor product
+    vendor="$(dmi sys_vendor)"; product="$(dmi product_name)"
+    case "$vendor $product" in
+        *LENOVO*|*Lenovo*)
+            say "  hint (Lenovo): ThinkPads use the thinkpad_acpi driver (loaded: $(yesno mod_loaded thinkpad_acpi)); the EC runs the fan automatically unless set by hand." ;;
+        *Dell*|*DELL*)
+            say "  hint (Dell): the dell-smm-hwmon driver exposes the fan on many models (loaded: $(yesno mod_loaded dell_smm_hwmon))." ;;
+        *ASUS*|*Asus*)
+            say "  hint (ASUS): asus-nb-wmi provides the platform profile that selects the fan curve (loaded: $(yesno mod_loaded asus_nb_wmi)); 'asusctl' (asus-linux.org) adds per-profile fan curves." ;;
+        *)
+            if has_battery; then
+                say "  hint: on laptops the firmware normally handles it. If the fan really doesn't react, look for a model driver"
+                say "        (nbfc-linux from the AUR supports many HP/Acer/MSI/Samsung/Lenovo models)."
+            else
+                say "  hint (desktop): run 'sudo sensors-detect' (package lm_sensors) to find the motherboard fan chip, then"
+                say "        'sudo pwmconfig' + the fancontrol service, or CoolerControl, if you want your own fan curve."
+            fi
+            ;;
+    esac
+}
+
+section_policy() {
+    sec "cpu / platform power policy"
+    local pol drv gov epp tur st pp choices ppd
+    pol="$SYS/devices/system/cpu/cpu0/cpufreq"
+    drv="$(rd "$pol/scaling_driver")"; gov="$(rd "$pol/scaling_governor")"; epp="$(rd "$pol/energy_performance_preference")"
+    say "  scaling driver:   ${drv:-none (no cpufreq - a VM, or the driver is missing)}"
+    say "  governor:         ${gov:-?}"
+    [ -n "$epp" ] && say "  energy preference: $epp"
+    tur="$(rd "$SYS/devices/system/cpu/intel_pstate/no_turbo")"
+    [ -n "$tur" ] && say "  intel turbo:      $([ "$tur" = 1 ] && echo disabled || echo enabled)"
+    st="$(rd "$SYS/devices/system/cpu/amd_pstate/status")"
+    [ -n "$st" ] && say "  amd_pstate:       $st"
+    [ -z "$drv" ] && problem "no cpufreq driver is active (no $pol). The CPU can't be throttled down when idle, which keeps it warm: check 'dmesg | grep -i -E \"pstate|cpufreq\"', and that the kernel is recent enough for this CPU"
+
+    pp="$SYS/firmware/acpi/platform_profile"
+    if [ -r "$pp" ]; then
+        choices="$(rd "${pp}_choices")"
+        say "  platform profile: $(rd "$pp")   (choices: ${choices:-?})"
+        case "$(rd "$pp")" in
+            performance)
+                problem "the firmware platform profile is 'performance': the fan curve and power limits are set to run hotter and louder ON PURPOSE. If you chose it on purpose, ignore this; otherwise: powerprofilesctl set balanced   (or: echo balanced | sudo tee $pp)" ;;
+        esac
+    else
+        say "  platform profile: not exposed by this firmware/kernel"
+    fi
+
+    if have powerprofilesctl; then
+        ppd="$(timeout 3 powerprofilesctl get 2>/dev/null || true)"
+        say "  power-profiles-daemon profile: ${ppd:-not answering}"
+        [ "$ppd" = performance ] && problem "power-profiles-daemon is set to 'performance' (also what Quick settings' power tile shows). That profile runs hotter and louder by design (ignore this if you chose it on purpose): powerprofilesctl set balanced"
+    fi
+    if [ "$gov" = performance ] && [ "${ppd:-}" != performance ]; then
+        problem "the CPU governor is 'performance' but nothing asked for the performance profile: the CPU is held at high clocks all the time (heat, fan noise). Usual culprits: a cpupower/tlp setting, a udev rule or 'cpufreq.default_governor=performance' on the kernel command line"
+    fi
+}
+
+section_services() {
+    sec "services that manage power and heat"
+    local vendor s st
+    vendor="$(cpu_vendor)"
+    for s in power-profiles-daemon thermald tlp auto-cpufreq "${FAN_DAEMONS[@]}"; do
+        if svc_installed "$s"; then
+            st="installed, $(svc_active "$s" && echo running || echo NOT running), $(svc_enabled "$s" && echo enabled-at-boot || echo not-enabled)"
+            printf '  %-22s %s\n' "$s" "$st"
+        else
+            case "$s" in
+                power-profiles-daemon|thermald) printf '  %-22s not installed\n' "$s" ;;
+            esac
+        fi
+    done
+
+    if ! have systemctl; then
+        say "  systemctl not found: service checks skipped"
+        return
+    fi
+
+    local ppd_ok=false
+    svc_active power-profiles-daemon && ppd_ok=true
+    if ! $ppd_ok; then
+        if svc_active tlp || svc_active auto-cpufreq; then
+            say "  (power-profiles-daemon is off, but tlp/auto-cpufreq is managing power - that is a valid choice)"
+        elif svc_installed power-profiles-daemon; then
+            problem "power-profiles-daemon is installed but not running, so nothing manages the CPU power state or platform profile (and the Quick settings power tile is hidden). Fix: dot-thermal setup   (or: sudo systemctl enable --now power-profiles-daemon)"
+        else
+            problem "nothing manages power/thermal policy: power-profiles-daemon is not installed (and neither tlp nor auto-cpufreq runs). The CPU then runs on kernel defaults and can't be switched to a quieter profile, so it runs warmer and the firmware fan curve has to work harder; the Quick settings power tile stays hidden. Fix: dot-thermal setup   (pacman -S power-profiles-daemon)"
+        fi
+    fi
+    if $ppd_ok && { svc_active tlp || svc_active auto-cpufreq; }; then
+        problem "power-profiles-daemon AND tlp/auto-cpufreq are both running: they overwrite each other's CPU/platform settings, so the fan/heat behaviour flips unpredictably. Keep one: e.g. sudo systemctl disable --now tlp   (or the opposite)"
+    fi
+    if [ "$vendor" = intel ]; then
+        if svc_installed thermald; then
+            svc_active thermald || problem "thermald (Intel's thermal daemon) is installed but not running. Fix: dot-thermal setup   (or: sudo systemctl enable --now thermald)"
+        else
+            problem "thermald is not installed. On Intel CPUs it keeps the package under its thermal limit with gentler steps than the emergency throttle. Fix: dot-thermal setup   (pacman -S thermald)"
+        fi
+    fi
+}
+
+section_throttle() {
+    local f v pkg=0 core=0
+    for f in "$SYS"/devices/system/cpu/cpu*/thermal_throttle/package_throttle_count; do
+        [ -r "$f" ] || continue
+        v="$(rd "$f")"; case "$v" in ''|*[!0-9]*) continue ;; esac
+        [ "$v" -gt "$pkg" ] && pkg="$v"
+    done
+    for f in "$SYS"/devices/system/cpu/cpu*/thermal_throttle/core_throttle_count; do
+        [ -r "$f" ] || continue
+        v="$(rd "$f")"; case "$v" in ''|*[!0-9]*) continue ;; esac
+        core=$((core + v))
+    done
+    [ -e "$SYS/devices/system/cpu/cpu0/thermal_throttle" ] || return 0
+    sec "thermal throttling since boot (Intel)"
+    say "  package throttle events: $pkg   core throttle events: $core"
+    if [ "$pkg" -gt 0 ]; then
+        problem "the CPU package hit its thermal limit and was throttled $pkg times since boot: cooling is not keeping up. Look at the fan/heat items above; if the fan really spins, think dust in the heatsink or dried thermal paste"
+    fi
+}
+
+# Names of the processes that hold the given /dev/dri nodes open (unique, space separated).
+# DOT_PROC (default /proc) can point at a fake tree.
+gpu_users() { # gpu_users <node basename>...
+    local proc="${DOT_PROC:-/proc}" fd t n names=""
+    for fd in "$proc"/[0-9]*/fd/*; do
+        t="$(readlink "$fd" 2>/dev/null)" || continue
+        for n in "$@"; do
+            [ "$t" = "/dev/dri/$n" ] && names+="$(rd "${fd%/fd/*}/comm")"$'\n'
+        done
+    done
+    printf '%s' "$names" | sort -u | tr '\n' ' ' | sed 's/ *$//'
+}
+
+# Discrete = NVIDIA, or (when there are several GPUs) any card that is not the boot VGA device.
+# On a hybrid laptop the integrated GPU is the boot device; a heuristic, so it is labelled "looks".
+gpu_is_discrete() { # gpu_is_discrete <card dir> <number of GPUs>
+    local d="$1/device"
+    [ "$(rd "$d/vendor")" = 0x10de ] && return 0
+    [ "$2" -gt 1 ] && [ "$(rd "$d/boot_vga")" = 0 ]
+}
+
+section_gpu() {
+    local n=0 c d card v vendor_name rt ctl lvl drv nodes users conn drives pci igpu_path="" r
+    for c in "$SYS"/class/drm/card[0-9]; do [ -d "$c/device" ] && n=$((n + 1)); done
+    [ "$n" -gt 0 ] || return 0
+    sec "graphics ($n GPU$([ "$n" -gt 1 ] && echo s))"
+
+    # the integrated GPU's stable path, for the AQ_DRM_DEVICES hint
+    for c in "$SYS"/class/drm/card[0-9]; do
+        [ -d "$c/device" ] || continue
+        if ! gpu_is_discrete "$c" "$n"; then
+            pci="$(basename "$(readlink -f "$c/device")")"
+            igpu_path="/dev/dri/by-path/pci-$pci-card"
+            break
+        fi
+    done
+
+    for c in "$SYS"/class/drm/card[0-9]; do
+        d="$c/device"; [ -d "$d" ] || continue
+        card="${c##*/}"
+        v="$(rd "$d/vendor")"
+        case "$v" in
+            0x10de) vendor_name=NVIDIA ;;
+            0x1002) vendor_name=AMD ;;
+            0x8086) vendor_name=Intel ;;
+            *) vendor_name="$v" ;;
+        esac
+        rt="$(rd "$d/power/runtime_status")"; ctl="$(rd "$d/power/control")"
+        drv="$(basename "$(readlink -f "$d/driver" 2>/dev/null)" 2>/dev/null)"
+        printf '  %-6s %-7s driver=%-9s %-18s runtime_pm=%s (control=%s)\n' "$card" "$vendor_name" "$drv" \
+            "$(gpu_is_discrete "$c" "$n" && echo "looks discrete" || echo "integrated/primary")" "${rt:-?}" "${ctl:-?}"
+
+        # forced clocks keep any amdgpu hot even when idle
+        lvl="$(rd "$d/power_dpm_force_performance_level")"
+        if [ -n "$lvl" ] && [ "$lvl" != auto ]; then
+            problem "$card ($vendor_name): GPU clock policy is forced to '$lvl' instead of 'auto', so the GPU stays at high clocks (heat, fan noise). A tool or script set it (corectrl, a udev rule, a startup script). Reset: echo auto | sudo tee $d/power_dpm_force_performance_level"
+        fi
+
+        gpu_is_discrete "$c" "$n" || continue
+
+        if [ "$ctl" = on ]; then
+            problem "$card ($vendor_name discrete): runtime power management is forced ON (power/control=on), so this GPU can never go to sleep. Reset: echo auto | sudo tee $d/power/control   (and find what sets it: tlp, a udev rule, 'nvidia' module options)"
+        fi
+
+        [ "$rt" = active ] || continue
+        drives=""
+        for conn in "$SYS"/class/drm/"$card"-*; do
+            [ -e "$conn/status" ] || continue
+            [ "$(rd "$conn/status")" = connected ] && drives+="${conn##*/$card-} "
+        done
+        if [ -n "$drives" ]; then
+            say "      awake because it drives: ${drives% }  (expected while that monitor is connected)"
+            say "      on battery, using only the laptop panel lets this GPU sleep: less heat, quieter fans, longer battery"
+            continue
+        fi
+        nodes=("$card")
+        for r in "$d"/drm/renderD*; do [ -e "$r" ] && nodes+=("${r##*/}"); done
+        users="$(gpu_users "${nodes[@]}")"
+        problem "$card ($vendor_name discrete GPU) is powered on although it drives no monitor${users:+; open by: $users}. An idle desktop shouldn't need it, and it adds heat and fan noise. $(case " $users " in *" Hyprland "*) echo "Hyprland itself is using it: put the integrated GPU first with AQ_DRM_DEVICES${igpu_path:+=$igpu_path} in hypr/autostart.lua (hl.env) and restart Hyprland. ";; esac)Apps can be kept off it by not setting DRI_PRIME / prime-run globally"
+    done
+}
+
+section_battery() {
+    has_battery || return 0
+    sec "battery"
+    local b cap st thr supported=false tip=false
+    for b in "$SYS"/class/power_supply/BAT*; do
+        [ -d "$b" ] || continue
+        cap="$(rd "$b/capacity")"; st="$(rd "$b/status")"; thr="$(rd "$b/charge_control_end_threshold")"
+        case "$thr" in
+            ''|*[!0-9]*)
+                printf '  %-6s %3s%%  %-13s charge limit: not exposed by this kernel/firmware\n' "${b##*/}" "${cap:-?}" "${st:-?}" ;;
+            *)
+                supported=true
+                printf '  %-6s %3s%%  %-13s charge limit: %s%%\n' "${b##*/}" "${cap:-?}" "${st:-?}" "$thr"
+                [ "$thr" -ge 100 ] && ! on_battery && tip=true ;;
+        esac
+    done
+    $tip && say "  tip: plugged in most of the time? Keeping a battery at 100% wears it faster. Cap it at 80%:  dot-thermal battery 80"
+    if ! $supported; then
+        say "  (If your laptop has a battery-care / charge-limit option, it is probably in the BIOS/UEFI or the vendor's tool.)"
+    fi
+}
+
+section_load() {
+    [ "${DOT_THERMAL_NO_LOAD:-0}" = 1 ] && return 0
+    have top || return 0
+    sec "what is using the CPU right now (1 s sample, % of one core)"
+    local rows pct name
+    rows="$(LC_ALL=C top -b -n 2 -d 1 2>/dev/null | awk '/^top -/{n++} n==2 && /^ *[0-9]+ /{print $9, $12}' | grep -v ' top$' | head -n 5)"
+    if [ -z "$rows" ]; then
+        say "  (top gave no usable output)"
+        return
+    fi
+    printf '%s\n' "$rows" | sed 's/^/  /'
+    pct="$(printf '%s\n' "$rows" | head -n 1 | awk '{printf "%d", $1}')"
+    name="$(printf '%s\n' "$rows" | head -n 1 | awk '{print $2}')"
+    if [ "${pct:-0}" -ge 60 ]; then
+        problem "'$name' is using ${pct}% of a core right now. A busy process is a common reason for a fan running hard while the machine looks idle. Find out why (btop), or close it"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+run_sections() {
+    problems=()
+    section_machine
+    if in_vm; then
+        sec "virtual machine"
+        say "  Fans and temperatures belong to the host, not to this VM: there is nothing to fix here."
+        say "  If the host's fans are loud, look at how busy the VM keeps its CPUs (dot-doctor -> busiest processes)."
+        return
+    fi
+    section_temps
+    section_fans
+    section_policy
+    section_services
+    section_throttle
+    section_gpu
+    section_battery
+    section_load
+}
+
+cmd_status() {
+    local mode="${1:-status}"
+    run_sections
+    case "$mode" in
+        machine)
+            local p
+            if [ "${#problems[@]}" -gt 0 ]; then
+                for p in "${problems[@]}"; do printf 'PROBLEM|%s\n' "$p"; done
+            fi
+            ;;
+        doctor)
+            sec "Likely problems"
+            if [ "${#problems[@]}" -eq 0 ]; then
+                say "  none of the automatic checks tripped."
+                say "  If the fans still misbehave: note the temperature and RPM above while it happens, then run"
+                say "  'dot-thermal watch' under load and send that output together with 'dot-thermal doctor'."
+            else
+                local i=1 p
+                for p in "${problems[@]}"; do say "  $i. $p"; i=$((i + 1)); done
+                say ""
+                say "  Most of these are fixed by:  dot-thermal setup"
+            fi
+            ;;
+        *)
+            say ""
+            if [ "${#problems[@]}" -gt 0 ]; then
+                say "${#problems[@]} possible problem(s) found. Run:  dot-thermal doctor"
+            else
+                say "No problems found."
+            fi
+            ;;
+    esac
+    [ "$mode" != doctor ] || [ "${#problems[@]}" -eq 0 ]
+}
+
+cmd_watch() {
+    trap 'printf "\n"; exit 0' INT TERM
+    while true; do
+        clear 2>/dev/null || printf '\033c'
+        say "dot-thermal watch   $(date +%T)   (Ctrl+C to stop)"
+        problems=(); cpu_temp=0; fans_seen=0; fan_max_rpm=0
+        section_temps
+        section_fans
+        sec "now"
+        say "  governor: $(rd "$SYS/devices/system/cpu/cpu0/cpufreq/scaling_governor")   freq: $(awk '{printf "%.2f GHz", $1/1000000}' "$SYS/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq" 2>/dev/null)   load: $(cut -d' ' -f1-3 /proc/loadavg)"
+        have powerprofilesctl && say "  power profile: $(timeout 2 powerprofilesctl get 2>/dev/null)"
+        sleep 2
+    done
+}
+
+# ask "question" -> 0 for yes
+ASSUME_YES=false
+DRY_RUN=false
+ask() {
+    $ASSUME_YES && return 0
+    [ -t 0 ] || return 1
+    local reply=""
+    read -r -p "$1 [Y/n] " reply
+    case "$reply" in [nN]*) return 1 ;; *) return 0 ;; esac
+}
+
+# pkg_present <pacman package name>: asks pacman on Arch; elsewhere guesses from the binary / unit.
+pkg_present() {
+    if have pacman; then pacman -Qq "$1" >/dev/null 2>&1; return; fi
+    case "$1" in
+        power-profiles-daemon) have powerprofilesctl || svc_installed power-profiles-daemon ;;
+        thermald)              svc_installed thermald ;;
+        lm_sensors)            have sensors ;;
+        *)                     return 1 ;;
+    esac
+}
+
+run() {
+    if $DRY_RUN; then printf '  would: %s\n' "$*"; return 0; fi
+    "$@"
+}
+
+cmd_setup() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -y|--yes) ASSUME_YES=true ;;
+            -n|--dry-run) DRY_RUN=true ;;
+            *) err "unknown option: $1 (see --help)"; exit 2 ;;
+        esac
+        shift
+    done
+    if [ "$(id -u)" -eq 0 ]; then err "don't run this as root - it uses sudo only for the steps that need it"; exit 1; fi
+    if in_vm; then
+        say "This is a virtual machine: fans and temperatures belong to the host. Nothing to set up."
+        return 0
+    fi
+    $DRY_RUN && say "=== DRY RUN - nothing will be changed ==="
+    have sudo || $DRY_RUN || { err "sudo not found - it is needed to install packages and enable services"; exit 1; }
+
+    local vendor pkgs=() units=() p
+    vendor="$(cpu_vendor)"
+
+    sec "what will be set up"
+    if svc_active tlp || svc_active auto-cpufreq; then
+        say "  tlp/auto-cpufreq is running and manages power: power-profiles-daemon is NOT added (the two fight)."
+    else
+        units+=(power-profiles-daemon)
+        pkg_present power-profiles-daemon || pkgs+=(power-profiles-daemon)
+    fi
+    if [ "$vendor" = intel ]; then
+        units+=(thermald)
+        pkg_present thermald || pkgs+=(thermald)
+    fi
+    pkg_present lm_sensors || pkgs+=(lm_sensors)
+    say "  packages to install: ${pkgs[*]:-none}"
+    say "  services to enable:  ${units[*]:-none}"
+
+    # 1. packages
+    if [ "${#pkgs[@]}" -gt 0 ]; then
+        sec "packages"
+        if have pacman; then
+            if $DRY_RUN || ask "Install ${pkgs[*]} with pacman (needs sudo)?"; then
+                local nc=(); $ASSUME_YES && nc=(--noconfirm)
+                run sudo pacman -S --needed "${nc[@]}" "${pkgs[@]}" || warn "pacman could not install everything"
+            else
+                say "  skipped"
+            fi
+        else
+            say "  pacman not found. Install these with your distro's package manager: ${pkgs[*]}"
+            say "  (Debian/Ubuntu: power-profiles-daemon thermald lm-sensors; Fedora: power-profiles-daemon thermald lm_sensors)"
+        fi
+    fi
+
+    # 2. services (re-read: they may only exist now)
+    sec "services"
+    if ! have systemctl; then
+        say "  systemctl not found - enable the services by hand."
+    else
+        local u
+        for u in "${units[@]}"; do
+            if ! svc_installed "$u" && ! $DRY_RUN; then
+                say "  $u: not installed, skipped"
+                continue
+            fi
+            if svc_active "$u" && svc_enabled "$u"; then
+                say "  $u: already running and enabled"
+            elif $DRY_RUN || ask "Enable and start $u now (sudo systemctl enable --now $u)?"; then
+                run sudo systemctl enable --now "$u" || warn "could not enable $u"
+            else
+                say "  $u: skipped"
+            fi
+        done
+    fi
+
+    # 3. fans left in manual / full-speed mode
+    sec "fans left in manual mode"
+    local daemon h pe en cur name any=false
+    daemon="$(active_fan_daemon || true)"
+    if [ -n "$daemon" ]; then
+        say "  $daemon is running and owns the fans: leaving them alone."
+    else
+        for h in "$SYS"/class/hwmon/hwmon*; do
+            [ -d "$h" ] || continue
+            name="$(rd "$h/name")"
+            for pe in "$h"/pwm[0-9]*_enable; do
+                [ -e "$pe" ] || continue
+                en="$(rd "$pe")"
+                case "$en" in 0|1) ;; *) continue ;; esac
+                any=true
+                cur="$([ "$en" = 0 ] && echo 'full speed' || echo 'manual')"
+                if $DRY_RUN || ask "$name ${pe##*/} is on $cur. Hand it back to automatic (writes 2 to $pe)?"; then
+                    if $DRY_RUN; then say "  would: write 2 (automatic) to $pe"
+                    else echo 2 | sudo tee "$pe" >/dev/null && say "  $name ${pe##*/}: now $(rd "$pe") (2 = automatic)" || warn "the kernel refused the write; this chip may use another mode number (see its datasheet / the hwmon docs)"
+                    fi
+                fi
+            done
+        done
+        $any || say "  none found."
+    fi
+
+    sec "result"
+    $DRY_RUN && { say "  (dry run: nothing changed)"; return 0; }
+    DOT_THERMAL_NO_LOAD=1 cmd_status doctor || true
+    say ""
+    say "Now test: see 'dot-thermal watch' while you run something heavy (e.g. 'yes > /dev/null' in 4 terminals) -"
+    say "the temperature should rise, the fan RPM should follow within ~10-30 s, and both should fall after you stop."
+}
+
+UNIT_DIR="${DOT_UNIT_DIR:-/etc/systemd/system}"
+UNIT_NAME=dot-charge-limit.service
+
+# write_root <file> <content>: sudo tee (or print, in a dry run)
+write_root() {
+    if $DRY_RUN; then
+        say "  would write $1:"
+        printf '%s\n' "$2" | sed 's/^/      /'
+        return 0
+    fi
+    printf '%s\n' "$2" | sudo tee "$1" >/dev/null
+}
+
+cmd_battery() {
+    local value="" arg thr_files=() b f
+    for arg in "$@"; do
+        case "$arg" in
+            -y|--yes) ASSUME_YES=true ;;
+            -n|--dry-run) DRY_RUN=true ;;
+            -*) err "unknown option: $arg (see --help)"; exit 2 ;;
+            *) value="$arg" ;;
+        esac
+    done
+    for b in "$SYS"/class/power_supply/BAT*; do
+        [ -e "$b/charge_control_end_threshold" ] && thr_files+=("$b/charge_control_end_threshold")
+    done
+
+    if [ -z "$value" ]; then
+        has_battery || { say "No battery found: nothing to limit."; return 0; }
+        section_battery
+        say ""
+        say "Usage:  dot-thermal battery 80     cap charging at 80% (allowed: 50-100)"
+        say "        dot-thermal battery off    remove the limit (charge to 100%)"
+        return 0
+    fi
+
+    case "$value" in
+        off|none|100) value=100 ;;
+        *[!0-9]*|'') err "'$value' is not a percentage. Use a number from 50 to 100, or 'off'."; exit 2 ;;
+        *) if [ "$value" -lt 50 ] || [ "$value" -gt 100 ]; then err "the limit must be between 50 and 100 (or 'off')."; exit 2; fi ;;
+    esac
+
+    if [ "$(id -u)" -eq 0 ]; then err "don't run this as root - it uses sudo only for the steps that need it"; exit 1; fi
+    has_battery || { say "No battery found: nothing to limit."; return 0; }
+    if [ "${#thr_files[@]}" -eq 0 ]; then
+        err "this kernel/firmware doesn't expose a charge limit (no charge_control_end_threshold on the battery)."
+        say "  ASUS: needs the asus-wmi driver (kernel 5.x+); ThinkPad: thinkpad_acpi; others: the option is usually in the BIOS/UEFI"
+        say "  ('Battery care', 'Battery health', 'Conservation mode') or in the vendor's own tool."
+        return 1
+    fi
+    have sudo || $DRY_RUN || { err "sudo not found - it is needed to write the limit"; exit 1; }
+    $DRY_RUN && say "=== DRY RUN - nothing will be changed ==="
+
+    if [ "$value" -eq 100 ]; then
+        ask "Remove the charge limit (charge to 100%)?" || $DRY_RUN || { say "nothing changed"; return 0; }
+    else
+        ask "Limit battery charging to ${value}% (applied now and at every boot/resume; needs sudo)?" || $DRY_RUN || { say "nothing changed"; return 0; }
+    fi
+
+    for f in "${thr_files[@]}"; do
+        if write_root "$f" "$value"; then
+            $DRY_RUN || say "  ${f#"$SYS"/class/power_supply/}: now $(rd "$f")%"
+            if ! $DRY_RUN && [ "$(rd "$f")" != "$value" ]; then
+                warn "the kernel did not accept $value for $f (it reads back '$(rd "$f")'); this laptop may only allow certain values (often 60/80/100)"
+            fi
+        else
+            warn "could not write $f"
+        fi
+    done
+
+    if [ "$value" -eq 100 ]; then
+        if [ -e "$UNIT_DIR/$UNIT_NAME" ] || $DRY_RUN; then
+            run sudo systemctl disable "$UNIT_NAME" || true
+            run sudo rm -f "$UNIT_DIR/$UNIT_NAME"
+            run sudo systemctl daemon-reload
+            say "  removed the boot/resume unit"
+        fi
+        say "Done: charging to 100% again."
+    else
+        local targets="suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
+        local unit
+        unit="[Unit]
+Description=Limit battery charge to ${value}% (dot-thermal battery)
+After=$targets
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for f in /sys/class/power_supply/BAT*/charge_control_end_threshold; do [ -w \"\$\$f\" ] && echo ${value} > \"\$\$f\"; done; true'
+
+[Install]
+WantedBy=multi-user.target $targets"
+        write_root "$UNIT_DIR/$UNIT_NAME" "$unit" || { warn "could not write the unit; the limit will be lost at reboot"; return 1; }
+        run sudo systemctl daemon-reload
+        run sudo systemctl enable "$UNIT_NAME" || warn "could not enable $UNIT_NAME"
+        say "Done: charging stops at ${value}%, also after reboot and resume."
+        say "  (A battery already above ${value}% stays there until it discharges.)"
+        say "  Remove it any time:  dot-thermal battery off"
+    fi
+}
+
+case "${1:-status}" in
+    status)        cmd_status status ;;
+    doctor)        cmd_status doctor ;;
+    --machine)     cmd_status machine ;;
+    watch)         cmd_watch ;;
+    setup)         shift; cmd_setup "$@" ;;
+    battery)       shift; cmd_battery "$@" ;;
+    -h|--help|help)
+        sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
+    *)
+        err "unknown command: $1 (see --help)"; exit 2 ;;
+esac
