@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# dot-ui-scale - make the whole Quickshell UI (bar, menu, panels, notifications) bigger or smaller.
+#
+#   dot-ui-scale              show the current scale
+#   dot-ui-scale 1.25         set it (0.75 - 2.0) and restart the shell
+#   dot-ui-scale reset        back to 1.0
+#
+# The value lives in ~/.config/hypr/ui-scale and is applied as QT_SCALE_FACTOR to Quickshell
+# only (autostart.lua and dot-reload read it), so other apps and Hyprland's monitor scale are
+# not affected.
+#
+set -uo pipefail
+file="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/ui-scale"
+
+current() { local v=""; [ -r "$file" ] && v="$(head -n1 "$file" | tr -d '[:space:]')"; printf '%s' "${v:-1.0}"; }
+
+case "${1:-}" in
+    "") echo "UI scale: $(current)   (dot-ui-scale 1.25 | reset)"; exit 0 ;;
+    reset|1|1.0) rm -f -- "$file"; echo "UI scale: 1.0" ;;
+    *)
+        v="$1"
+        if ! printf '%s' "$v" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || ! awk -v v="$v" 'BEGIN{exit !(v>=0.75 && v<=2.0)}'; then
+            echo "dot-ui-scale: '$v' is not a number between 0.75 and 2.0" >&2; exit 2
+        fi
+        mkdir -p "$(dirname "$file")" && printf '%s\n' "$v" >"$file"
+        echo "UI scale: $v"
+        ;;
+esac
+
+if command -v dot-reload >/dev/null 2>&1; then dot-reload shell >/dev/null 2>&1 || echo "restart the shell with: dot-reload shell"; fi
