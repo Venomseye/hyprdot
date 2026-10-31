@@ -95,7 +95,7 @@ PanelWindow {
     }
 
     screen: Quickshell.screens.find(s => s.name === Hyprland.focusedMonitor?.name) ?? Quickshell.screens[0]
-    visible: shown
+    visible: shown || card.opacity > 0.01
     anchors {
         top: true
         bottom: true
@@ -115,7 +115,6 @@ PanelWindow {
         filter = "";
         if (!listProc.running) listProc.running = true;
         if (!stateProc.running) stateProc.running = true;
-        appear.restart();
         Qt.callLater(() => keys.forceActiveFocus());
     }
 
@@ -149,7 +148,7 @@ PanelWindow {
         anchors.fill: parent
         color: Colors.scrim
         opacity: root.shown ? 0.4 : 0
-        Behavior on opacity { NumberAnimation { duration: Style.animMs } }
+        Behavior on opacity { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs } }
 
         MouseArea {
             anchors.fill: parent
@@ -184,16 +183,13 @@ PanelWindow {
         }
     }
 
-    ParallelAnimation {
-        id: appear
-        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
-        NumberAnimation { target: card; property: "slide"; from: 16; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
-    }
-
     Rectangle {
         id: card
 
-        property real slide: 0
+        property real slide: root.shown ? 0 : 12
+        opacity: root.shown ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
+        Behavior on slide { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
         width: Math.min(parent.width - 2 * Style.gap, Math.min(1040, Math.max(560, parent.width * 0.72)))
         height: Math.min(parent.height - 80, Math.max(360, parent.height * 0.72))
         x: Math.round((parent.width - width) / 2)

@@ -46,7 +46,7 @@ Scope {
     }
 
     PanelWindow {
-        visible: root.showing
+        visible: root.showing || pill.opacity > 0.01
         anchors.bottom: true
         margins.bottom: 90
         implicitWidth: 300
@@ -58,7 +58,10 @@ Scope {
         WlrLayershell.layer: WlrLayer.Overlay
 
         Rectangle {
+            id: pill
             anchors.fill: parent
+            opacity: root.showing ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: root.showing ? 90 : 160; easing.type: Easing.OutQuint } }
             radius: Style.radius
             color: Colors.alpha(Colors.surfaceContainer, Style.panelOpacity)
             border.width: 1

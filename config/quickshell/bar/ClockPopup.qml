@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
 import qs.theme
+import qs.services
 import "CalendarMath.js" as Cal
 
 // Month grid with ISO week numbers and month stepping, opened from the clock.
@@ -15,32 +16,32 @@ PanelWindow {
     property date month: new Date()
     property real centerX: 0
 
-    visible: false
+    property bool shown: false
+    visible: shown || card.opacity > 0.01
     anchors {
         top: true
         bottom: true
         left: true
         right: true
     }
-    margins.top: Style.barHeight
+    margins.top: Style.barHeight + ShellState.barInset
     exclusionMode: ExclusionMode.Ignore
     color: "transparent"
     WlrLayershell.namespace: "qs-calendar"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: shown ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
     function open(win, cx) {
         month = new Date();
         centerX = cx;
         if (win && win.screen) screen = win.screen;
-        visible = true;
-        appear.restart();
+        shown = true;
         idle.restart();
         Qt.callLater(() => keys.forceActiveFocus());
     }
 
     function toggle(win, cx) {
-        if (visible) visible = false;
+        if (shown) shown = false;
         else open(win, cx);
     }
 
@@ -52,14 +53,14 @@ PanelWindow {
     Timer {
         id: idle
         interval: Style.popupIdleMs
-        running: popup.visible
-        onTriggered: popup.visible = false
+        running: popup.shown
+        onTriggered: popup.shown = false
     }
 
     // Click outside the card closes.
     MouseArea {
         anchors.fill: parent
-        onClicked: popup.visible = false
+        onClicked: popup.shown = false
     }
 
     // Esc closes. (Needs keyboard focus, which the overlay takes while open.)
@@ -67,19 +68,16 @@ PanelWindow {
         id: keys
         anchors.fill: parent
         focus: true
-        Keys.onEscapePressed: popup.visible = false
-    }
-
-    ParallelAnimation {
-        id: appear
-        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
-        NumberAnimation { target: card; property: "slide"; from: -8; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
+        Keys.onEscapePressed: popup.shown = false
     }
 
     Rectangle {
         id: card
 
-        property real slide: 0
+        property real slide: popup.shown ? 0 : -8
+        opacity: popup.shown ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: popup.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
+        Behavior on slide { NumberAnimation { duration: popup.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
         width: 292
         height: 262
         x: Math.max(Style.gap, Math.min(popup.centerX - width / 2, popup.width - width - Style.gap))

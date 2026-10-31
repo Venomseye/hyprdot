@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Services.Notifications
 import qs.theme
@@ -19,6 +20,43 @@ Scope {
 
     property var history: []      // newest first, max 10
     readonly property int maxVisible: 4
+
+    // The history survives a shell restart / re-login (last ten, ~/.local/state/quickshell-dot/history.json).
+    readonly property string historyPath: Style.stateHome + "/quickshell-dot/history.json"
+    property bool historyReady: false
+    property bool historyDirty: false
+
+    function saveHistory() {
+        if (!historyReady) return;
+        if (historyWriter.running) { historyDirty = true; return; }
+        historyWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1"', "sh",
+            historyPath, JSON.stringify(history.map(e => ({ appName: e.appName, summary: e.summary, body: e.body, time: e.time.toISOString() })))];
+        historyWriter.running = true;
+    }
+    onHistoryChanged: saveHistory()
+
+    Process {
+        id: historyWriter
+        onExited: {
+            if (root.historyDirty) { root.historyDirty = false; root.saveHistory(); }
+        }
+    }
+
+    FileView {
+        path: root.historyPath
+        printErrors: false
+        onLoaded: {
+            try {
+                const a = JSON.parse(text());
+                if (Array.isArray(a) && root.history.length === 0)
+                    root.history = a.slice(0, 10).map(e => ({ appName: String(e.appName ?? ""), summary: String(e.summary ?? ""), body: String(e.body ?? ""), time: new Date(e.time) }));
+            } catch (e) {
+                console.warn("notifications: ignoring unreadable history: " + e);
+            }
+            root.historyReady = true;
+        }
+        onLoadFailed: root.historyReady = true
+    }
 
     NotificationServer {
         id: server
@@ -55,7 +93,7 @@ Scope {
             right: true
         }
         margins {
-            top: Style.barHeight + Style.gap
+            top: Style.barHeight + ShellState.barInset + Style.gap
             right: Style.gap
         }
         implicitWidth: 400
@@ -98,7 +136,7 @@ Scope {
             left: true
             right: true
         }
-        margins.top: Style.barHeight
+        margins.top: Style.barHeight + ShellState.barInset
         exclusionMode: ExclusionMode.Ignore
         color: "transparent"
         WlrLayershell.namespace: "qs-notification-history"

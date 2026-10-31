@@ -11,7 +11,7 @@ BarItem {
 
     onClicked: mouse => {
         if (mouse.button === Qt.RightButton)
-            Quickshell.execDetached(["sh", "-c", "command -v nmtui >/dev/null 2>&1 && exec kitty --title=nmtui -e nmtui"]);
+            Quickshell.execDetached(["sh", "-c", "command -v nmtui >/dev/null 2>&1 && exec kitty --class=dot-nmtui --title=nmtui -e nmtui"]);
         else if (mouse.button === Qt.LeftButton)
             ShellState.toggleQuick();
     }

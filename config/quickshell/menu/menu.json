@@ -31,8 +31,36 @@
         "title": "Toggle bar transparency",
         "glyph": "\uf12e",
         "action": "qs ipc call shell toggle transparency"
+      },
+      {
+        "title": "UI size",
+        "glyph": "\uf002",
+        "subtitle": "Scale the whole shell",
+        "children": [
+          { "title": "Small (90%)", "glyph": "\uf068", "action": "dot-ui-scale 0.9", "notify": true },
+          { "title": "Normal (100%)", "glyph": "\uf111", "action": "dot-ui-scale reset", "notify": true },
+          { "title": "Large (115%)", "glyph": "\uf067", "action": "dot-ui-scale 1.15", "notify": true },
+          { "title": "Larger (130%)", "glyph": "\uf067", "action": "dot-ui-scale 1.3", "notify": true },
+          { "title": "Huge (150%)", "glyph": "\uf067", "action": "dot-ui-scale 1.5", "notify": true }
+        ]
+      },
+      {
+        "title": "Bar style",
+        "glyph": "\uf0db",
+        "subtitle": "Classic, floating or islands",
+        "children": [
+          { "title": "Classic", "glyph": "\uf2d0", "subtitle": "Full-width bar", "action": "qs ipc call shell barstyle classic" },
+          { "title": "Floating", "glyph": "\uf2d2", "subtitle": "Detached rounded bar", "action": "qs ipc call shell barstyle floating" },
+          { "title": "Islands", "glyph": "\uf00a", "subtitle": "Separate rounded pills", "action": "qs ipc call shell barstyle islands" }
+        ]
       }
     ]
+  },
+  {
+    "title": "Keybinds",
+    "glyph": "\uf11c",
+    "subtitle": "Every shortcut, from bindings.lua",
+    "action": "qs ipc call shell toggle keys"
   },
   {
     "title": "Capture",
@@ -152,22 +180,42 @@
       {
         "title": "Check keyboard / Compose key",
         "glyph": "\uf11c",
-        "action": "kitty --title=dot-update -e bash -c 'dot-restart-xcompose --check; echo; read -rp \"Press Enter to close \" _'"
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-restart-xcompose --check; echo; read -rp \"Press Enter to close \" _'"
       },
       {
         "title": "Fix wallpaper (create config, add wallpapers)",
         "glyph": "\uf03e",
-        "action": "kitty --title=dot-update -e bash -c 'dot-wallpaper init; echo; read -rp \"Press Enter to close \" _'"
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-wallpaper init; echo; read -rp \"Press Enter to close \" _'"
       },
       {
         "title": "Diagnose problems (dot-doctor)",
         "glyph": "\uf0f1",
-        "action": "kitty --title=dot-update -e bash -c 'dot-doctor; echo; read -rp \"Press Enter to close \" _'"
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-doctor; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Fans & temperatures (dot-thermal)",
+        "glyph": "\uf2c9",
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-thermal doctor; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Fix fans / power policy (dot-thermal setup)",
+        "glyph": "\uf0ad",
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-thermal setup; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Battery: limit charge to 80%",
+        "glyph": "\uf240",
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-thermal battery 80; echo; read -rp \"Press Enter to close \" _'"
+      },
+      {
+        "title": "Battery: charge to 100% (no limit)",
+        "glyph": "\uf240",
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-thermal battery off; echo; read -rp \"Press Enter to close \" _'"
       },
       {
         "title": "Fix dark mode in apps (dot-theme)",
         "glyph": "\uf186",
-        "action": "kitty --title=dot-update -e bash -c 'dot-theme init; echo; dot-theme doctor; echo; read -rp \"Press Enter to close \" _'"
+        "action": "kitty --class=dot-update --title=dot-update -e bash -c 'dot-theme init; echo; dot-theme doctor; echo; read -rp \"Press Enter to close \" _'"
       }
     ]
   },

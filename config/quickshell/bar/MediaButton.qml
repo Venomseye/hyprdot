@@ -1,7 +1,7 @@
 import QtQuick
 import qs.theme
 
-// Round icon button for the media pill. `filled` = the primary play/pause button.
+// Round icon button for the now-playing card. `filled` = the primary play/pause button.
 Rectangle {
     id: root
 
@@ -21,6 +21,8 @@ Rectangle {
         ? (area.containsMouse ? Colors.primaryContainer : Colors.primary)
         : (area.containsMouse ? root.hoverColor : "transparent")
     Behavior on color { ColorAnimation { duration: 120 } }
+    scale: area.pressed ? 0.88 : (area.containsMouse ? 1.06 : 1)
+    Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuint } }
 
     Txt {
         anchors.centerIn: parent

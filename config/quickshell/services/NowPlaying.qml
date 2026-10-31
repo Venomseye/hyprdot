@@ -22,6 +22,21 @@ Singleton {
     readonly property string artist: (root.player?.trackArtist ?? "").trim()
     readonly property string artUrl: root.player?.trackArtUrl ?? ""
 
+    // Progress. Mpris does not push the position, so whoever shows it calls refreshPosition()
+    // (the Quick settings card does, once a second, only while it is open).
+    readonly property real length: (root.player?.lengthSupported ?? false) ? (root.player.length ?? 0) : 0
+    property real position: 0
+
+    function refreshPosition() {
+        const p = root.player;
+        if (p && (p.positionSupported ?? false)) {
+            p.positionChanged();
+            root.position = p.position;
+        } else {
+            root.position = 0;
+        }
+    }
+
     function togglePlaying() { if (root.player) root.player.togglePlaying(); }
     function next() { if (root.player) root.player.next(); }
     function previous() { if (root.player) root.player.previous(); }

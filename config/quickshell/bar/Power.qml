@@ -12,7 +12,7 @@ BarItem {
         if (mouse.button === Qt.RightButton)
             ShellState.batteryPercent = !ShellState.batteryPercent;
         else
-            Quickshell.execDetached(["sh", "-c", "command -v btop >/dev/null 2>&1 && exec kitty --title=btop -e btop"]);
+            Quickshell.execDetached(["sh", "-c", "command -v btop >/dev/null 2>&1 && exec kitty --class=dot-btop --title=btop -e btop"]);
     }
 
     BarIcon {

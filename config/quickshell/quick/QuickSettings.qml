@@ -27,14 +27,14 @@ PanelWindow {
     PwObjectTracker { objects: [root.sink, root.source].filter(o => o) }
 
     screen: Quickshell.screens.find(s => s.name === Hyprland.focusedMonitor?.name) ?? Quickshell.screens[0]
-    visible: shown
+    visible: shown || card.opacity > 0.01
     anchors {
         top: true
         bottom: true
         left: true
         right: true
     }
-    margins.top: Style.barHeight
+    margins.top: Style.barHeight + ShellState.barInset
     exclusionMode: ExclusionMode.Ignore
     color: "transparent"
     WlrLayershell.namespace: "qs-quick"
@@ -50,7 +50,6 @@ PanelWindow {
         Caffeine.refresh();
         PowerProfile.refresh();
         NightLight.refresh();
-        appear.restart();
         Qt.callLater(() => keys.forceActiveFocus());
     }
 
@@ -79,16 +78,13 @@ PanelWindow {
         Keys.onEscapePressed: ShellState.quickOpen = false
     }
 
-    ParallelAnimation {
-        id: appear
-        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
-        NumberAnimation { target: card; property: "slide"; from: -12; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
-    }
-
     Rectangle {
         id: card
 
-        property real slide: 0
+        property real slide: root.shown ? 0 : -10
+        opacity: root.shown ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
+        Behavior on slide { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
         anchors.right: parent.right
         anchors.rightMargin: Style.gap
         y: Style.gap + slide
@@ -134,6 +130,8 @@ PanelWindow {
                         }
                     }
                 }
+
+                NowPlayingCard { Layout.fillWidth: true }
 
                 // ---- sliders
                 SliderRow {
@@ -190,7 +188,7 @@ PanelWindow {
                         active: NetState.kind !== "none"
                         onClicked: {
                             ShellState.quickOpen = false;
-                            Run.sh("command -v nmtui >/dev/null 2>&1 && exec kitty --title=nmtui -e nmtui");
+                            Run.sh("command -v nmtui >/dev/null 2>&1 && exec kitty --class=dot-nmtui --title=nmtui -e nmtui");
                         }
                     }
                     Tile {

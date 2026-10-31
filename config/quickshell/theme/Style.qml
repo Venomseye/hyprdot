@@ -23,7 +23,8 @@ Singleton {
     // Panels are slightly see-through (real blur needs the layer rule at the end of
     // hypr/rules.lua), and fade/slide in over animMs.
     readonly property real panelOpacity: 0.9
-    readonly property int animMs: 140
+    readonly property int animMs: 130      // panel open
+    readonly property int animOutMs: 80    // panel close (closing should feel instant)
 
     // Log out / Reboot / Shut down ask for a second Enter (or a second click) before running.
     // Set to false to run them on the first one.

@@ -6,6 +6,7 @@ import qs.services
 import qs.bar
 import qs.menu
 import qs.notifications
+import qs.keys
 import qs.osd
 import qs.quick
 import qs.wallpaper
@@ -31,6 +32,7 @@ ShellRoot {
     Osd {}
     QuickSettings {}
     WallpaperPicker {}
+    KeysPanel {}
     BatteryMonitor {}
 
     IpcHandler {
@@ -40,18 +42,24 @@ ShellRoot {
             return "ok";
         }
 
-        // ids: menu | history | quick | wallpapers | dnd | transparency | nightlight
+        // ids: menu | history | quick | wallpapers | keys | dnd | transparency | nightlight
         function toggle(id: string): void {
             switch (id) {
             case "menu": ShellState.toggleMenu(); break;
             case "history": ShellState.toggleHistory(); break;
             case "quick": ShellState.toggleQuick(); break;
             case "wallpapers": ShellState.toggleWallpapers(); break;
+            case "keys": ShellState.toggleKeys(); break;
             case "dnd": ShellState.dnd = !ShellState.dnd; break;
             case "transparency": ShellState.barTransparent = !ShellState.barTransparent; break;
             case "nightlight": NightLight.toggle(); break;
             default: console.warn("shell toggle: unknown id '" + id + "'");
             }
+        }
+
+        // Bar look:  qs ipc call shell barstyle classic|floating|islands|next
+        function barstyle(name: string): void {
+            ShellState.setBarStyle(name);
         }
 
         // The menu with the calculator ready:  qs ipc call shell calc
@@ -81,6 +89,7 @@ ShellRoot {
             if (id === "history") ShellState.historyOpen = true;
             else if (id === "quick") ShellState.quickOpen = true;
             else if (id === "wallpapers") ShellState.wallpapersOpen = true;
+            else if (id === "keys") ShellState.keysOpen = true;
         }
 
         function hide(id: string): void {
@@ -88,6 +97,7 @@ ShellRoot {
             else if (id === "history") ShellState.historyOpen = false;
             else if (id === "quick") ShellState.quickOpen = false;
             else if (id === "wallpapers") ShellState.wallpapersOpen = false;
+            else if (id === "keys") ShellState.keysOpen = false;
         }
     }
 }

@@ -23,6 +23,18 @@ PanelWindow {
         right: true
     }
     implicitHeight: Style.barHeight
+    // The three looks (ShellState.barStyle). classic = the flat full-width slab; floating and
+    // islands are inset from the screen edge and rounded.
+    readonly property bool floating: ShellState.barStyle !== "classic"
+    readonly property bool islands: ShellState.barStyle === "islands"
+    readonly property int sideInset: floating ? Style.gap : 0
+    margins {
+        top: bar.floating ? ShellState.barInset : 0
+        left: bar.sideInset
+        right: bar.sideInset
+    }
+    exclusionMode: ExclusionMode.Normal
+    exclusiveZone: Style.barHeight
     color: "transparent"
     WlrLayershell.namespace: "qs-bar"
 
@@ -50,9 +62,9 @@ PanelWindow {
             top: true
             left: true
         }
-        margins.top: Style.barHeight + 3
+        margins.top: Style.barHeight + ShellState.barInset + 3
         // centred on the icon, but never past either screen edge
-        margins.left: Math.max(Style.gap, Math.min(Math.round(bar.tipX - tipBox.width / 2), bar.width - tipBox.width - Style.gap))
+        margins.left: Math.max(Style.gap, Math.min(Math.round(bar.tipX - tipBox.width / 2) + bar.sideInset, bar.width + 2 * bar.sideInset - tipBox.width - Style.gap))
         implicitWidth: tipBox.width
         implicitHeight: tipBox.height
         exclusionMode: ExclusionMode.Ignore
@@ -82,10 +94,16 @@ PanelWindow {
         }
     }
 
-    // The slab. Declared first so widgets sit above its MouseArea.
+    // The background. Declared first so widgets sit above it.
+    // classic: flat slab. floating: one rounded bar. islands: no slab, see the Repeater below.
     Rectangle {
         anchors.fill: parent
-        color: ShellState.barTransparent ? "transparent" : Colors.surface
+        visible: !bar.islands
+        radius: bar.floating ? Style.radius : 0
+        color: ShellState.barTransparent ? "transparent"
+             : (bar.floating ? Colors.alpha(Colors.surface, 0.94) : Colors.surface)
+        border.width: (bar.floating && !ShellState.barTransparent) ? 1 : 0
+        border.color: Colors.outlineVariant
         Behavior on color { ColorAnimation { duration: 150 } }
 
         Rectangle {
@@ -93,19 +111,35 @@ PanelWindow {
             width: parent.width
             height: 1
             color: Colors.outlineVariant
-            visible: !ShellState.barTransparent
+            visible: !ShellState.barTransparent && !bar.floating
         }
+    }
 
-        MouseArea {
-            anchors.fill: parent
-            onDoubleClicked: ShellState.barTransparent = !ShellState.barTransparent
+    // islands: a rounded pill behind each of the left group, the clock and the right group
+    Repeater {
+        model: bar.islands ? [leftGroup, clock, rightGroup] : []
+        Rectangle {
+            required property var modelData
+            x: modelData.x - 8
+            width: modelData.width + 16
+            height: parent.height
+            radius: Style.radius
+            color: ShellState.barTransparent ? "transparent" : Colors.alpha(Colors.surface, 0.94)
+            border.width: ShellState.barTransparent ? 0 : 1
+            border.color: Colors.outlineVariant
+            Behavior on color { ColorAnimation { duration: 150 } }
         }
+    }
+
+    MouseArea {
+        anchors.fill: parent
+        onDoubleClicked: ShellState.barTransparent = !ShellState.barTransparent
     }
 
     RowLayout {
         id: leftGroup
         anchors.left: parent.left
-        anchors.leftMargin: 4
+        anchors.leftMargin: bar.islands ? 10 : 4
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
 
@@ -118,20 +152,14 @@ PanelWindow {
         anchors.centerIn: parent
     }
 
-    Media {
-        // the room between the workspaces and the clock; the pill shortens its text to fit
-        maxWidth: Math.max(0, clock.x - Style.gap - (leftGroup.x + leftGroup.width) - Style.gap)
-        anchors.right: clock.left
-        anchors.rightMargin: Style.gap
-        anchors.verticalCenter: parent.verticalCenter
-    }
-
     RowLayout {
+        id: rightGroup
         anchors.right: parent.right
-        anchors.rightMargin: 4
+        anchors.rightMargin: bar.islands ? 10 : 4
         anchors.verticalCenter: parent.verticalCenter
         spacing: 0
 
+        Media {}
         Tray {}
         UpdatesItem {}
         NightLightItem {}

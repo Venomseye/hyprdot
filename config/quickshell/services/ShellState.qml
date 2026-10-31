@@ -18,11 +18,23 @@ Singleton {
     property string menuQuery: ""        // ...with this already typed (e.g. "=" for the calculator)
     property bool quickOpen: false
     property bool wallpapersOpen: false
+    property bool keysOpen: false
     property bool historyOpen: false
 
     // Persisted
     property bool dnd: false
     property bool barTransparent: false
+    // "classic" (full-width slab), "floating" (detached rounded bar) or "islands" (three pills)
+    property string barStyle: "classic"
+    readonly property var barStyles: ["classic", "floating", "islands"]
+    // gap above a floating bar; panels that open below the bar add it to their top margin
+    readonly property int barInset: barStyle === "classic" ? 0 : 6
+
+    function setBarStyle(name) {
+        if (name === "next") name = barStyles[(barStyles.indexOf(barStyle) + 1) % barStyles.length];
+        if (barStyles.indexOf(name) < 0) { console.warn("barstyle: unknown style '" + name + "'"); return; }
+        barStyle = name;
+    }
     property int clockFormat: 1
     property bool batteryPercent: true
 
@@ -36,6 +48,7 @@ Singleton {
         historyOpen = false;
         quickOpen = false;
         wallpapersOpen = false;
+        keysOpen = false;
     }
 
     function toggleMenu() {
@@ -67,6 +80,12 @@ Singleton {
         quickOpen = !was;
     }
 
+    function toggleKeys() {
+        const was = keysOpen;
+        closePanels();
+        keysOpen = !was;
+    }
+
     function toggleWallpapers() {
         const was = wallpapersOpen;
         closePanels();
@@ -78,6 +97,7 @@ Singleton {
             const s = JSON.parse(text);
             if (typeof s.dnd === "boolean") dnd = s.dnd;
             if (typeof s.barTransparent === "boolean") barTransparent = s.barTransparent;
+            if (typeof s.barStyle === "string" && barStyles.indexOf(s.barStyle) >= 0) barStyle = s.barStyle;
             if (typeof s.clockFormat === "number") clockFormat = s.clockFormat;
             if (typeof s.batteryPercent === "boolean") batteryPercent = s.batteryPercent;
         } catch (e) {
@@ -91,7 +111,7 @@ Singleton {
         writer.command = [
             "sh", "-c", 'mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1"', "sh",
             statePath,
-            JSON.stringify({ dnd: dnd, barTransparent: barTransparent, clockFormat: clockFormat, batteryPercent: batteryPercent })
+            JSON.stringify({ dnd: dnd, barTransparent: barTransparent, barStyle: barStyle, clockFormat: clockFormat, batteryPercent: batteryPercent })
         ];
         writer.running = true;
     }
@@ -113,6 +133,7 @@ Singleton {
 
     FileView {
         path: root.statePath
+        printErrors: false
         onLoaded: { root.parse(text()); root.ready = true; }
         onLoadFailed: root.ready = true   // first run: no file yet
     }

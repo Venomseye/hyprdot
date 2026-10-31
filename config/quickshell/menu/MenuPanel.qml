@@ -52,7 +52,7 @@ PanelWindow {
     readonly property var visibleRows: rows.slice(viewStart, viewStart + pageSize)
 
     screen: Quickshell.screens.find(s => s.name === Hyprland.focusedMonitor?.name) ?? Quickshell.screens[0]
-    visible: shown
+    visible: shown || card.opacity > 0.01   // stay mapped while the close fade plays
     anchors {
         top: true
         bottom: true
@@ -225,11 +225,25 @@ PanelWindow {
         }
     }
 
+    function refreshData() {
+        if (!userMenu.running) userMenu.running = true;
+        if (!snippets.running) snippets.running = true;
+        if (!clipProc.running) clipProc.running = true;
+    }
+
+    Timer {
+        id: refreshTimer
+        interval: Style.animMs + 60
+        onTriggered: if (root.shown) root.refreshData()
+    }
+
     onShownChanged: {
         if (shown) {
-            if (!userMenu.running) userMenu.running = true;
-            if (!snippets.running) snippets.running = true;
-            if (!clipProc.running) clipProc.running = true;
+            // The three data processes (dot-clip alone forks ~30 times) would compete with the
+            // open animation, so they start once it has finished - or at once when a category
+            // such as Clipboard was asked for and is waiting for its entries.
+            if (ShellState.menuCategory !== "") refreshData();
+            else refreshTimer.restart();
             pending = null;
             direct = false;
             mouseMode = false;
@@ -242,7 +256,6 @@ PanelWindow {
                 field.text = ShellState.menuQuery;
                 ShellState.menuQuery = "";
             }
-            appear.restart();
             Qt.callLater(() => field.forceActiveFocus());
         }
     }
@@ -291,18 +304,12 @@ PanelWindow {
         anchors.fill: parent
         color: Colors.scrim
         opacity: root.shown ? 0.35 : 0
-        Behavior on opacity { NumberAnimation { duration: Style.animMs } }
+        Behavior on opacity { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs } }
 
         MouseArea {
             anchors.fill: parent
             onClicked: ShellState.menuOpen = false
         }
-    }
-
-    ParallelAnimation {
-        id: appear
-        NumberAnimation { target: card; property: "opacity"; from: 0; to: 1; duration: Style.animMs; easing.type: Easing.OutCubic }
-        NumberAnimation { target: card; property: "slide"; from: 14; to: 0; duration: Style.animMs; easing.type: Easing.OutCubic }
     }
 
     Rectangle {
@@ -312,7 +319,10 @@ PanelWindow {
 
         width: Math.min(parent.width - 2 * Style.gap, Math.min(720, Math.max(480, parent.width * 0.4)))
         height: content.implicitHeight + 24
-        property real slide: 0              // slides up into place while fading in
+        property real slide: root.shown ? 0 : 10   // slides into place while fading in
+        opacity: root.shown ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
+        Behavior on slide { NumberAnimation { duration: root.shown ? Style.animMs : Style.animOutMs; easing.type: Easing.OutQuint } }
         x: Math.round((parent.width - width) / 2)
         y: Math.round(parent.height * 0.2) + slide
         radius: Style.menuRadius
