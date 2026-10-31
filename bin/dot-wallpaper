@@ -4,7 +4,10 @@
 #
 #   dot-wallpaper next | prev       change wallpaper (says so when there is nothing to change to)
 #   dot-wallpaper set <image>       show exactly this image (rotation stops until `rotate`)
-#   dot-wallpaper rotate            go back to rotating through the whole folder
+#   dot-wallpaper rotate [MIN]      change the wallpaper by itself every MIN minutes (default 30),
+#                                   the SAME image on every display
+#   dot-wallpaper sync              make every display show one image (converts an old folder setup)
+#   dot-wallpaper daemon            the background timer behind `rotate` (started by Hyprland)
 #   dot-wallpaper list              print every image wpaperd can show, one path per line
 #   dot-wallpaper state             current image, rotating or pinned, theme mode and style
 #   dot-wallpaper theme [mode dark|light] [style NAME]
@@ -17,8 +20,10 @@
 #                                   folder has fewer than two, and restart wpaperd
 #   dot-wallpaper -h                this message
 #
-# How it fits together: wpaperd draws the wallpaper and rotates through the images in the
-# `path` of its config. Each time it changes one it runs the `exec` script
+# How it fits together: wpaperd draws the wallpaper. Its own folder rotation picks an image per
+# display, so several monitors end up with different wallpapers and the colours follow only one
+# of them. So the config points at ONE image, and `dot-wallpaper` does the changing (next/prev,
+# the picker, or the `daemon` timer): every display always shows the same picture. Each time it changes one it runs the `exec` script
 # (~/.config/wpaperd/matugen-hook.sh), and that regenerates every colour in the desktop.
 # So: no config, an empty folder or a single image = nothing to change to = colours never move.
 #
@@ -34,6 +39,8 @@ WDIR="${DOT_WALLPAPER_DIR:-${XDG_PICTURES_DIR:-$HOME/Pictures}/Wallpapers}"
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dot-wallpaper"
 THEME_CONF="$STATE_DIR/theme.conf"      # read by wpaperd/matugen-hook.sh
+ROTATE_FILE="$STATE_DIR/rotate"         # minutes between automatic changes, or "off" (pinned)
+LAST_FILE="$STATE_DIR/last-change"      # touched whenever the wallpaper changes
 FOLDER_FILE="$STATE_DIR/folder"         # the folder to rotate through, remembered while an image is pinned
 STYLES=(tonal-spot expressive fidelity content neutral monochrome rainbow fruit-salad)
 
@@ -88,9 +95,15 @@ total_images() {
 # ---------------------------------------------------------------- next / prev
 # A wallpaper picked in the picker (or with `set`) is PINNED: wpaperd's `path` is one file, so
 # its own next/previous have nothing to rotate through. Step through the folder instead.
+current_image() {   # the image on screen: the config's file, else what the theme hook last saw
+    local first; first="$(config_paths | head -n 1)"
+    if [ -n "$first" ] && [ -f "$first" ]; then readlink -f -- "$first"; return; fi
+    [ -L "$cache_dir/current-wallpaper" ] && readlink -f -- "$cache_dir/current-wallpaper"
+}
+
 step_pinned() {   # step_pinned next-wallpaper|previous-wallpaper
     local cur i=-1 idx n list=()
-    cur="$(readlink -f -- "$(config_paths | head -n 1)" 2>/dev/null)"
+    cur="$(current_image)"
     mapfile -t list < <(list_images)
     n=${#list[@]}
     [ "$n" -ge 2 ] || die "only $n image(s) in $(rotation_folder) - add more wallpapers there (or run: dot-wallpaper init)"
@@ -104,22 +117,11 @@ step_pinned() {   # step_pinned next-wallpaper|previous-wallpaper
     else
         i=$(( (i - 1 + n) % n ))
     fi
-    cmd_set "${list[$i]}"
+    cmd_set --keep-rotation "${list[$i]}"
 }
 
-change() {   # change next-wallpaper|previous-wallpaper
-    have wpaperctl || die "wpaperctl not found (it ships with wpaperd)"
-    wpaperd_running || die "wpaperd is not running. Start it: setsid -f wpaperd -d   (or run: dot-wallpaper doctor)"
-    local first; first="$(config_paths | head -n 1)"
-    if [ -n "$first" ] && [ -f "$first" ]; then
-        step_pinned "$1"
-        return
-    fi
-    local n; n="$(total_images)"
-    if [ "$n" -lt 2 ]; then
-        warn "wpaperd only has $n image(s) to show, so there is nothing to change to. Add more to $(rotation_folder) (or run: dot-wallpaper init)"
-    fi
-    wpaperctl "$1"
+change() {   # change next-wallpaper|previous-wallpaper  (always one image for every display)
+    step_pinned "$1"
 }
 
 # ---------------------------------------------------------------- doctor
@@ -142,7 +144,7 @@ doctor() {
         say
         while IFS= read -r p; do
             n="$(count_images "$p")"; total=$((total + n))
-            if [ -d "$p" ]; then say "  path $p: folder, $n image(s)"
+            if [ -d "$p" ]; then say "  path $p: folder, $n image(s)"; note "a folder path makes wpaperd choose a wallpaper PER DISPLAY (monitors differ). Run: dot-wallpaper sync"
             elif [ -f "$p" ]; then say "  path $p: a single file"
             else note "path does not exist: $p"; fi
             [ -d "$p" ] && [ "$n" -eq 0 ] && note "folder $p has no images wpaperd can read (jpg, png, webp...)"
@@ -215,10 +217,9 @@ theme_value() {   # theme_value KEY default
 }
 
 state() {
-    local cur="" rotating=yes first
+    local cur="" rotating=yes
     [ -L "$cache_dir/current-wallpaper" ] && cur="$(readlink "$cache_dir/current-wallpaper")"
-    first="$(config_paths | head -n 1)"
-    [ -n "$first" ] && [ -f "$first" ] && rotating=no
+    [ "$(rotate_minutes)" = off ] && rotating=no
     printf 'current=%s\nrotating=%s\nfolder=%s\nmode=%s\nstyle=%s\n' \
         "$cur" "$rotating" "$(rotation_folder)" "$(theme_value MODE dark)" "$(theme_value STYLE tonal-spot)"
 }
@@ -278,27 +279,96 @@ run_hook() {   # re-theme straight away instead of waiting for wpaperd's exec
 }
 
 cmd_set() {
-    local img="${1:-}" first
+    local keep=false img first
+    if [ "${1:-}" = --keep-rotation ]; then keep=true; shift; fi
+    img="${1:-}"
     [ -n "$img" ] || die "usage: dot-wallpaper set <image>"
     img="$(readlink -f -- "$img" 2>/dev/null)"
     [ -f "$img" ] || die "no such file: $1"
     is_image "$img" || die "not an image wpaperd can show (jpg, png, webp, bmp): $img"
     mkdir -p "$STATE_DIR"
     first="$(config_paths | head -n 1)"
-    # remember the folder we were rotating through, once
-    if [ ! -s "$FOLDER_FILE" ] && [ -d "$first" ]; then printf '%s\n' "$first" >"$FOLDER_FILE"; fi
+    # remember the folder the images come from, once
+    if [ ! -s "$FOLDER_FILE" ]; then
+        if [ -d "$first" ]; then printf '%s\n' "$first" >"$FOLDER_FILE"; else dirname -- "$img" >"$FOLDER_FILE"; fi
+    fi
     write_paths "$img"
     apply_pinned "$img"
+    touch "$LAST_FILE"
     run_hook "$img"
-    say "wallpaper set: $(basename "$img")  (pinned - 'dot-wallpaper rotate' resumes rotation)"
+    if $keep; then
+        say "wallpaper: $(basename "$img")"
+    else
+        printf 'off\n' >"$ROTATE_FILE"
+        say "wallpaper set: $(basename "$img")  (pinned - 'dot-wallpaper rotate' resumes automatic changes)"
+    fi
+}
+
+rotate_minutes() {   # prints the interval in minutes, or "off"
+    local v=""
+    [ -r "$ROTATE_FILE" ] && v="$(head -n 1 "$ROTATE_FILE" | tr -d '[:space:]')"
+    case "$v" in off) echo off ;; ''|*[!0-9]*) echo 30 ;; 0) echo off ;; *) echo "$v" ;; esac
+}
+
+# One image for every display. An old config pointing at a FOLDER lets wpaperd choose an image per
+# display; replace the folder by the image that is showing (or the first one).
+cmd_sync() {
+    local first img list=()
+    first="$(config_paths | head -n 1)"
+    if [ -n "$first" ] && [ -f "$first" ]; then say "already synced: every display shows $(basename "$first")"; return 0; fi
+    [ -n "$first" ] || die "no path in $CFG - run: dot-wallpaper init"
+    mkdir -p "$STATE_DIR"
+    [ -s "$FOLDER_FILE" ] || printf '%s\n' "$first" >"$FOLDER_FILE"
+    img="$(current_image)"
+    if [ -z "$img" ] || [ ! -f "$img" ]; then
+        mapfile -t list < <(list_images)
+        img="${list[0]:-}"
+    fi
+    [ -n "$img" ] || die "no images in $(rotation_folder) - add some, or run: dot-wallpaper init"
+    cmd_set --keep-rotation "$img"
 }
 
 cmd_rotate() {
-    local dir; dir="$(rotation_folder)"
-    [ -d "$dir" ] || die "rotation folder $dir does not exist"
-    write_paths "$dir"
-    apply_rotation
-    say "rotating through $dir"
+    local min="${1:-}"
+    if [ -n "$min" ]; then
+        case "$min" in ''|*[!0-9]*|0) die "rotate: minutes must be a whole number, e.g. dot-wallpaper rotate 20" ;; esac
+    else
+        min="$(rotate_minutes)"; [ "$min" = off ] && min=30
+    fi
+    mkdir -p "$STATE_DIR"
+    printf '%s\n' "$min" >"$ROTATE_FILE"
+    cmd_sync >/dev/null 2>&1 || true
+    daemon_running || { have setsid && setsid -f "$(readlink -f "${BASH_SOURCE[0]}")" daemon >/dev/null 2>&1 </dev/null; }
+    say "changing every $min min, the same wallpaper on every display"
+}
+
+daemon_running() { pgrep -f "dot-wallpaper daemon" >/dev/null 2>&1 || pgrep -f "$(basename "${BASH_SOURCE[0]}") daemon" >/dev/null 2>&1; }
+
+# Background timer: every 30 s check whether it is time to change. Survives suspend (the next check
+# after wake sees the elapsed time). Exits quietly when another copy already runs.
+cmd_daemon() {
+    mkdir -p "$STATE_DIR"
+    if have flock; then
+        exec 8>"$STATE_DIR/daemon.lock"
+        flock -n 8 || exit 0
+    fi
+    cmd_sync >/dev/null 2>&1 || true
+    local min last now img list=() n
+    while sleep 30; do
+        min="$(rotate_minutes)"
+        [ "$min" = off ] && continue
+        wpaperd_running || continue
+        last="$(stat -c %Y "$LAST_FILE" 2>/dev/null || echo 0)"; now="$(date +%s)"
+        [ $(( now - last )) -ge $(( min * 60 )) ] || continue
+        mapfile -t list < <(list_images)
+        n=${#list[@]}
+        [ "$n" -ge 2 ] || { touch "$LAST_FILE"; continue; }
+        img="$(current_image)"
+        # a random image that is not the current one
+        img="$(printf '%s\n' "${list[@]}" | grep -vxF -- "$img" | shuf -n 1)"
+        [ -n "$img" ] && cmd_set --keep-rotation "$img" >/dev/null 2>&1
+        touch "$LAST_FILE"
+    done
 }
 
 cmd_theme() {
@@ -374,13 +444,12 @@ init() {
         {
             echo "# Written by dot-wallpaper init. wpaperd reloads this file when it changes."
             echo "[default]"
-            echo "path = \"$WDIR\""
-            echo "duration = \"30m\""
-            echo "sorting = \"random\""
+            echo "path = \"$(find -L "$WDIR" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort | head -n 1)\""
+            echo "# one image for every display; dot-wallpaper changes it (rotate / next / the picker)"
             if [ -x "$HOOK" ]; then echo "exec = \"$HOOK\""; else warn "$HOOK missing - colours won't follow the wallpaper until you run install.sh"; fi
             echo
             echo "[any]"
-            echo "path = \"$WDIR\""
+            echo "path = \"$(find -L "$WDIR" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort | head -n 1)\""
         } >"$CFG"
         say "config: wrote $CFG"
     fi
@@ -402,7 +471,9 @@ case "${1:-}" in
     list)   list_images ;;
     state)  state ;;
     set)    shift; cmd_set "$@" ;;
-    rotate) cmd_rotate ;;
+    rotate) shift; cmd_rotate "$@" ;;
+    sync)   cmd_sync ;;
+    daemon) cmd_daemon ;;
     theme)  shift; cmd_theme "$@" ;;
     init)   shift; init "$@" ;;
     -h|--help|"") sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}" ;;
