@@ -7,6 +7,8 @@ Not a Lua parser. It lexes strings, comments and long brackets correctly, then r
   * a string that is not closed on its line, or characters such as \ $ ? that can only be
     the debris of a string that ended too early (the classic over-escaped quote),
   * ( ) { } [ ] that do not balance,
+  * a missing comma between two `key = value` entries of a table (a trailing `-- comment`
+    that swallowed the comma is the usual cause),
   * block keywords that do not balance (function / if / for / while / do ... end,
     repeat ... until).
 A real `luac -p` is better; dot-check uses that when it is installed.
@@ -84,6 +86,47 @@ def lex(src):
     return out, problems
 
 
+VALUE_END_WORDS_NOT = {"and", "or", "not", "in", "then", "do", "else", "elseif", "return", "local",
+                       "function", "if", "for", "while", "repeat", "until", "end", "nil", "true", "false"}
+
+
+def missing_commas(toks):
+    """Inside a table constructor: `... value` directly followed by `name =` needs a comma."""
+    problems, stack = [], []
+    pending_do = 0
+    for i, (kind, text, line) in enumerate(toks):
+        if kind == "op" and text in OPEN:
+            stack.append(text)
+        elif kind == "op" and text in CLOSE and stack and stack[-1] == CLOSE[text]:
+            stack.pop()
+        elif kind == "word":
+            if text in ("function", "if"):
+                stack.append(text)
+            elif text in ("for", "while"):
+                stack.append(text)
+                pending_do += 1
+            elif text == "do":
+                if pending_do:
+                    pending_do -= 1
+                else:
+                    stack.append(text)
+            elif text == "repeat":
+                stack.append(text)
+            elif text in ("end", "until") and stack and stack[-1] in ("function", "if", "for", "while", "do", "repeat"):
+                stack.pop()
+        if not stack or stack[-1] != "{" or i == 0 or kind != "word" or text in VALUE_END_WORDS_NOT:
+            continue
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        after = toks[i + 2] if i + 2 < len(toks) else None
+        if not (nxt and nxt[:2] == ("op", "=") and not (after and after[:2] == ("op", "="))):
+            continue
+        pk, pt, pl = toks[i - 1]
+        if (pk in ("num", "string") or (pk == "op" and pt in ")}]") or
+                (pk == "word" and pt not in VALUE_END_WORDS_NOT) or (pk == "word" and pt in ("end", "nil", "true", "false"))):
+            problems.append((pl, "missing ',' before '%s =' on line %d (did a trailing comment swallow it?)" % (text, line)))
+    return problems
+
+
 def check(path):
     src = open(path, encoding="utf-8").read()
     toks, problems = lex(src)
@@ -101,6 +144,9 @@ def check(path):
     else:
         if stack:
             problems.append((stack[-1][1], "'%s' is never closed" % stack[-1][0]))
+
+    if not problems:
+        problems.extend(missing_commas(toks))
 
     blocks, pending_do = [], 0
     for kind, text, line in toks:
