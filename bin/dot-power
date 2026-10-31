@@ -3,10 +3,16 @@
 # Session and power actions with fallbacks, for the menu and keybinds.
 #
 #   dot-power lock | suspend | logout | reboot | shutdown
+#   dot-power idle-suspend [battery|any]     what hypridle runs after a long idle time
 #
 #   lock      loginctl lock-session (hypridle then runs hyprlock). If hypridle isn't
 #             running that does nothing, so hyprlock is started directly instead.
 #   suspend   systemctl suspend (hypridle's before_sleep_cmd locks first).
+#   idle-suspend  suspend (or hibernate) because the machine sat idle. `battery` does nothing while on
+#             mains power, `any` always acts. What it does is set by one word in
+#             ~/.config/hypr/idle-action: suspend (default) | hibernate | suspend-then-hibernate |
+#             none. Hibernate needs swap and a resume= setup; without it (systemctl can-hibernate
+#             not "yes") it falls back to suspend.
 #   logout    hyprshutdown (closes windows cleanly) if installed, then ends this session with
 #             loginctl terminate-session (terminate-user only if the session id is unknown).
 #   reboot / shutdown
@@ -50,6 +56,31 @@ case "${1:-}" in
     suspend)
         have systemctl || complain "systemctl not found"
         exec systemctl suspend
+        ;;
+    idle-suspend)
+        have systemctl || complain "systemctl not found"
+        ps_dir="${DOT_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
+        on_ac=false; has_bat=false
+        for s in "$ps_dir"/*; do
+            [ -r "$s/type" ] || continue
+            case "$(cat "$s/type")" in
+                Mains|USB*) [ "$(cat "$s/online" 2>/dev/null)" = 1 ] && on_ac=true ;;
+                Battery)    has_bat=true ;;
+            esac
+        done
+        $has_bat || on_ac=true            # a desktop is always "on mains"
+        if [ "${2:-any}" = battery ] && $on_ac; then exit 0; fi
+        act=suspend
+        af="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/idle-action"
+        [ -r "$af" ] && act="$(head -n 1 "$af" | tr -d '[:space:]')"
+        case "$act" in
+            none) exit 0 ;;
+            hibernate|suspend-then-hibernate)
+                [ "$(systemctl can-hibernate 2>/dev/null)" = yes ] || act=suspend ;;
+            suspend|"") act=suspend ;;
+            *) act=suspend ;;
+        esac
+        exec systemctl "$act"
         ;;
     logout)
         have loginctl || complain "loginctl not found"
