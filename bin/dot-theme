@@ -12,6 +12,8 @@
 #   GTK3 (file dialogs) adw-gtk3-dark theme + gtk-3.0/settings.ini (needs adw-gtk-theme)
 #   Firefox, Chromium   the freedesktop portal (xdg-desktop-portal-gtk) -> color-scheme
 #   Qt apps             qt5ct / qt6ct with the matugen colour scheme (QT_QPA_PLATFORMTHEME)
+#   btop                btop.conf: color_theme = "matugen" (the generated theme) and
+#                       theme_background = False (so the terminal's translucency shows through)
 # wpaperd's hook (hooks/.d/theme-set.d/01-reload.sh) re-applies all of it on every wallpaper change.
 
 set -uo pipefail
@@ -35,6 +37,10 @@ CONF
         say "$d: wrote $f"
         return
     fi
+    if grep -q "^color_scheme_path=$scheme\$" "$f" && grep -q '^custom_palette=true' "$f" && grep -q '^style=Fusion' "$f"; then
+        say "$d: already configured"
+        return
+    fi
     cp -L -- "$f" "$f.bak-$(date +%Y%m%d_%H%M%S)" 2>/dev/null
     for kv in "color_scheme_path=$scheme" "custom_palette=true" "style=Fusion"; do
         key="${kv%%=*}"
@@ -45,13 +51,43 @@ CONF
     say "$d: updated $f (backup next to it)"
 }
 
+# btop only reads the generated theme (btop/themes/matugen.theme) if btop.conf asks for it.
+# Sets two keys and leaves everything else alone; btop itself rewrites the file when it exits,
+# so close btop before running this or it will put its old values back.
+btop_conf() {
+    local d="$config_dir/btop" f="$config_dir/btop/btop.conf" kv key changed=false
+    mkdir -p "$d/themes"
+    if [ ! -e "$f" ]; then
+        printf 'color_theme = "matugen"\ntheme_background = False\n' >"$f"
+        say "btop: wrote $f (matugen theme, terminal background)"
+        return
+    fi
+    for kv in 'color_theme = "matugen"' 'theme_background = False'; do
+        key="${kv%% =*}"
+        grep -qxF "$kv" "$f" && continue
+        if ! $changed; then cp -L -- "$f" "$f.bak-$(date +%Y%m%d_%H%M%S)" 2>/dev/null; changed=true; fi
+        if grep -q "^$key *=" "$f"; then sed -i "s#^$key *=.*#$kv#" "$f"; else printf '%s\n' "$kv" >>"$f"; fi
+    done
+    if $changed; then say "btop: updated $f (backup next to it) - restart btop"; else say "btop: already configured"; fi
+}
+
 init() {
     qt_conf qt5ct
     qt_conf qt6ct
+    btop_conf
     if have gsettings; then
-        gsettings set org.gnome.desktop.interface color-scheme prefer-dark
-        gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3-dark
-        say "gtk: dark preference set"
+        # follow the light/dark choice made in the wallpaper picker (dot-wallpaper theme)
+        local conf="${XDG_STATE_HOME:-$HOME/.local/state}/dot-wallpaper/theme.conf" mode=dark m=""
+        [ -r "$conf" ] && m="$(sed -n 's/^MODE=//p' "$conf" | head -n 1)"
+        [ "$m" = light ] && mode=light
+        if [ "$mode" = light ]; then
+            gsettings set org.gnome.desktop.interface color-scheme prefer-light
+            gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3
+        else
+            gsettings set org.gnome.desktop.interface color-scheme prefer-dark
+            gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3-dark
+        fi
+        say "gtk: $mode preference set"
         # File dialogs remember their last size; one that was once huge stays huge. Reset to a
         # comfortable default (hypr/rules.lua also sizes them when the window class matches).
         local schema
@@ -79,7 +115,7 @@ doctor() {
     if have gsettings; then
         cs="$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null)"; th="$(gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null)"
         say "  color-scheme = $cs   gtk-theme = $th   backend = $(gsettings get org.gnome.desktop.interface color-scheme >/dev/null 2>&1 && echo "${GSETTINGS_BACKEND:-default}")"
-        [ "$cs" = "'prefer-dark'" ] || bad "color-scheme isn't prefer-dark (run: dot-theme init)"
+        case "$cs" in "'prefer-dark'"|"'prefer-light'") ;; *) bad "color-scheme isn't prefer-dark/prefer-light (run: dot-theme init)" ;; esac
         have dconf || bad "dconf is missing: gsettings then uses a memory backend and the dark setting is forgotten immediately"
     else
         bad "gsettings not found (pacman -S glib2)"
@@ -94,6 +130,11 @@ doctor() {
         f="$config_dir/$d/$d.conf"
         if [ -s "$f" ] && grep -q 'custom_palette=true' "$f"; then say "  $d.conf: ok"; else bad "$d.conf missing or without the matugen palette (run: dot-theme init)"; fi
     done
+    say; say "== btop =="
+    f="$config_dir/btop/btop.conf"
+    if [ -f "$f" ] && grep -qxF 'color_theme = "matugen"' "$f"; then say "  btop.conf: color_theme = matugen"; else bad "btop.conf doesn't select the matugen theme, so btop shows its default colours (run: dot-theme init, with btop closed)"; fi
+    if [ -f "$f" ] && grep -qxF 'theme_background = False' "$f"; then say "  btop.conf: terminal background"; else bad "btop.conf has theme_background on: btop paints a solid box instead of the translucent terminal (run: dot-theme init)"; fi
+    if [ -s "$config_dir/btop/themes/matugen.theme" ]; then say "  themes/matugen.theme: present"; else bad "btop/themes/matugen.theme doesn't exist yet: change the wallpaper once (Super+Ctrl+W) so matugen generates it"; fi
     say
     [ "$n" -eq 0 ] && say "Theming looks right. Apps that were open before the change need a restart." || say "$n problem(s) above."
 }
