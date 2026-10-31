@@ -61,7 +61,7 @@ report() {
     qsd="$(readlink -f "$config/quickshell" 2>/dev/null || true)"
     echo "  ~/.config/quickshell -> ${qsd:-<missing>}"
     for b in dot-theme dot-screenshot dot-clip dot-snippets; do
-        [ -e "$repo/bin/$b" ] || echo "  note: $repo/bin/$b does not exist in this copy"
+        command -v "$b" >/dev/null 2>&1 || echo "  note: $b is not installed (run install.sh)"
     done
 
     # ------------------------------------------------------------------
@@ -206,10 +206,10 @@ report() {
     fi
     if printf '%s\n' "$qslog_now" | sed 's/\x1b\[[0-9;]*m//g' \
         | grep -iE 'error|failed to load|unavailable|is not a type|not installed|cannot assign' \
-        | grep -viE 'NoActivePlayer|playerctld|File does not exist|Reloading|host portal|page-flip' | grep -q .; then
+        | grep -viE 'NoActivePlayer|playerctld|File does not exist|Reloading|host portal|page-flip|mpris|ServiceUnknown|not activatable|quickshell.dbus.properties' | grep -q .; then
         issue "quickshell.log (since the last start) contains real errors - see the section above and send it"
     fi
-    echo "  (playerctld 'NoActivePlayer' and 'File does not exist' warnings are harmless)"
+    echo "  (playerctld, MPRIS 'ServiceUnknown' and 'File does not exist' warnings are harmless)"
 
     # ------------------------------------------------------------------
     sec "theming (why some apps stay light)"
@@ -276,6 +276,18 @@ report() {
         if [ -n "$avg" ] && awk -v a="$avg" 'BEGIN { exit !(a > 2.0) }'; then
             issue "suspend costs ${avg} %/h of battery (a healthy suspend is well under 1 %/h). Check the 'power & suspend' section: mem_sleep, suspend_stats hw_sleep, the GPU's runtime_pm, inhibitors"
         fi
+    fi
+
+    sec "fans & temperatures (dot-thermal: sensors, fan modes, power-profiles-daemon, thermald)"
+    dt="$(command -v dot-thermal || true)"; [ -n "$dt" ] || dt="$repo/bin/dot-thermal"
+    if [ -x "$dt" ]; then
+        tout="$("$dt" --machine 2>&1)"
+        printf '%s\n' "$tout" | grep -v '^PROBLEM|' | sed '/^== machine ==$/,/^  kernel:/d' | cat -s
+        while IFS= read -r tl; do
+            [ -n "$tl" ] && issue "fans/heat: ${tl#PROBLEM|}"
+        done < <(printf '%s\n' "$tout" | grep '^PROBLEM|')
+    else
+        echo "  dot-thermal not found (re-run install.sh)"
     fi
 
     sec "bluetooth / network hardware (why a Quick settings tile may be missing)"
