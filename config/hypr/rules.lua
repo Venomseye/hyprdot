@@ -55,43 +55,50 @@ hl.window_rule({
 	no_focus = true,
 })
 
+-- Window sizes. Hyprland's Lua API does NOT understand "60% 70%" (that was the old hyprlang
+-- syntax: such a rule is silently ignored and the window keeps its default size, which is why
+-- these windows never changed size no matter what number was written here). `size` takes numbers
+-- or expressions: monitor_w / monitor_h are the monitor's logical size. pct(w, h) = w% x h%.
+local function pct(w, h)
+	return { string.format("(monitor_w*%.2f)", w / 100), string.format("(monitor_h*%.2f)", h / 100) }
+end
+
 -- Bar-launched utility windows (Quickshell bar spawns these by title/class):
 -- float + centre instead of tiling into the layout.
+-- Sizes are pct(w, h): a percentage of the monitor's LOGICAL size (resolution / scale). btop needs
+-- at least 80x24 cells and pavucontrol's tabs need width, so these are generous. Raise a number
+-- to make a window bigger (95 is about the most that still leaves a visible border).
 hl.window_rule({
 	name = "float-blueman-manager",
 	match = { class = "blueman-manager" },
 
 	float = true,
 	center = true,
-	size = "50% 50%",
+	size = pct(40, 65),
 })
 
-hl.window_rule({
-	name = "float-nmtui",
-	match = { title = "nmtui" },
+-- Terminal tools launched from the bar and menu (btop, nmtui, the updater ...).
+-- The launchers pass `kitty --class=dot-<name>` so the rule can match a dedicated class; the title
+-- match stays as a fallback (hand-started `kitty --title=btop`, other terminals).
+local function float_tool(id, w, h)
+	local class = id:match("^dot%-") and id or ("dot-" .. id) -- btop -> dot-btop, dot-update stays
+	for _, match in ipairs({ { class = "^" .. class .. "$" }, { title = "^" .. id .. "$" } }) do
+		hl.window_rule({
+			name = "float-" .. id .. (match.class and "-class" or "-title"),
+			match = match,
 
-	float = true,
-	center = true,
-	size = "45% 55%",
-})
+			float = true,
+			center = true,
+			size = pct(w, h),
+		})
+	end
+end
 
-hl.window_rule({
-	name = "float-btop",
-	match = { title = "btop" },
-
-	float = true,
-	center = true,
-	size = "99% 50%",
-})
-
-hl.window_rule({
-	name = "float-htop",
-	match = { title = "htop" },
-
-	float = true,
-	center = true,
-	size = "60% 65%",
-})
+float_tool("nmtui", 50, 60)
+float_tool("btop", 80, 64)
+float_tool("htop", 92, 90)
+float_tool("dot-keys", 85, 90)
+float_tool("dot-update", 92, 88)
 
 hl.window_rule({
 	name = "float-pavucontrol",
@@ -99,16 +106,7 @@ hl.window_rule({
 
 	float = true,
 	center = true,
-	size = "40% 50%",
-})
-
-hl.window_rule({
-	name = "float-dot-update",
-	match = { title = "dot-update" },
-
-	float = true,
-	center = true,
-	size = "70% 60%",
+	size = pct(45, 60),
 })
 
 -- File chooser (Upload / Open / Save from Firefox, Discord, ...). It comes from
@@ -122,7 +120,7 @@ hl.window_rule({
 
 	float = true,
 	center = true,
-	size = "55% 70%",
+	size = pct(75, 85),
 })
 
 -- Other small utility dialogs
@@ -151,6 +149,9 @@ pcall(function()
 		name = "quickshell-blur",
 		match = { namespace = "^qs-.*" },
 		blur = true,
-		ignore_alpha = 0.3,
+		-- Only blur pixels that are at least this opaque. The panels' dimming scrim is ~35-40%
+		-- over the WHOLE screen: with 0.3 Hyprland blurred the entire display (both monitors)
+		-- on every open, which made opening laggy. The cards are 90% opaque, so 0.5 keeps their blur.
+		ignore_alpha = 0.5,
 	})
 end)
