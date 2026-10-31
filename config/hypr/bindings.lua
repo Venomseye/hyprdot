@@ -71,6 +71,9 @@ hl.bind(mainMod .. " + CTRL + SHIFT + W", hl.dsp.exec_cmd(guarded("dot-wallpaper
 hl.bind(mainMod .. " + B", hl.dsp.exec_cmd(guarded("firefox", browser)))
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(guarded("nautilus", fileManager)))
 
+-- Every keybind as tiles (the list is generated from this file by dot-keys)
+hl.bind(mainMod .. " + slash", hl.dsp.exec_cmd(qs_ipc("shell", "toggle keys")))
+
 -- Clipboard history and calculator live in the same menu:
 hl.bind(mainMod .. " + V", hl.dsp.exec_cmd(qs_ipc("shell", "menu Clipboard")))
 hl.bind(mainMod .. " + C", hl.dsp.exec_cmd(qs_ipc("shell", "calc")))
@@ -253,7 +256,7 @@ hl.bind("ALT + PRINT", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot
 hl.bind(mainMod .. " + CTRL + S", hl.dsp.exec_cmd(guarded("dot-screenshot", "dot-screenshot region --edit")))  -- selection + annotate
 
 ---------------------------------------
----- WORKSPACES AND MONITORS (ML4W) ----
+---- WORKSPACES AND MONITORS ----
 ---------------------------------------
 
 -- Cycle workspaces; jump to the first empty one.
