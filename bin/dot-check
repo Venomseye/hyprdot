@@ -88,6 +88,8 @@ check_shell() {
     say "== shell scripts"
     local f n=0 out
     while IFS= read -r -d '' f; do
+        # bin/ also holds non-shell scripts (dot-keys is Python): only check what has a shell shebang
+        head -n 1 "$f" 2>/dev/null | grep -qE '^#!.*(sh|bash)( |$)' || continue
         n=$((n + 1))
         if ! out="$(bash -n "$f" 2>&1)"; then bad "${f#"$repo"/}: $out"; fi
     done < <({
@@ -98,7 +100,7 @@ check_shell() {
     say "   $n file(s) pass 'bash -n'"
     if have shellcheck; then
         # -S error: only real mistakes. Style findings are not worth failing a reload over.
-        if out="$(cd "$repo" && shellcheck -S error -x bin/* install.sh config/wpaperd/matugen-hook.sh config/hooks/run-hooks config/hooks/.d/*/*.sh 2>&1)"; then
+        if out="$(cd "$repo" && shellcheck -S error -x $(grep -lE '^#!.*(sh|bash)( |$)' bin/* 2>/dev/null) install.sh config/wpaperd/matugen-hook.sh config/hooks/run-hooks config/hooks/.d/*/*.sh 2>&1)"; then
             say "   shellcheck: clean"
         else
             note "shellcheck found problems:"$'\n'"$out"
@@ -131,6 +133,11 @@ PY
 # ---------------------------------------------------------------- Lua
 check_lua() {
     say "== Lua (Hyprland config)"
+    # Hyprland's Lua API takes numbers/expressions ("monitor_w*0.5"), not hyprlang percentages
+    # ("50% 50%"): such a rule is silently ignored and the window keeps its default size.
+    local pc
+    pc="$(grep -nE '(size|move|min_size|max_size)[[:space:]]*=[[:space:]]*"[^"]*%' "$hypr_dir"/*.lua 2>/dev/null)"
+    [ -n "$pc" ] && bad "percentage window size/move (old hyprlang syntax, ignored by the Lua API; use expressions such as {\"(monitor_w*0.5)\", \"(monitor_h*0.5)\"}):"$'\n'"$pc"
     local checker="" c f out n=0
     for c in luac luac5.4 luac5.3 luac5.1 luajit; do
         if have "$c"; then checker="$c"; break; fi
