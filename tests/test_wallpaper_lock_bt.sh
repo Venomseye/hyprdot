@@ -56,17 +56,31 @@ check "set: wpaperd was NOT restarted" '[ "$(wpid)" = "$p0" ] && kill -0 "$p0" 2
 bash "$D" next >/dev/null 2>&1; bash "$D" next >/dev/null 2>&1
 check "next x2 while pinned: stepped b -> c -> a" '[ "$(cfgpath)" = "$WP/a.png" ]'
 check "next x2: still the same wpaperd process" '[ "$(wpid)" = "$p0" ]'
-: > "$T/ctl.log"; bash "$D" rotate >/dev/null 2>&1
-check "rotate: config back to the folder" '[ "$(cfgpath)" = "$WP" ]'
-check "rotate: resumed cycling with next-wallpaper" 'grep -qx "next-wallpaper" "$T/ctl.log"'
+: > "$T/ctl.log"; bash "$D" rotate 20 >/dev/null 2>&1
+check "rotate: still ONE image for every display (not a per-display folder)" '[ -f "$(cfgpath)" ]'
+check "rotate: interval stored" '[ "$(cat "$T/state/dot-wallpaper/rotate")" = 20 ]'
 check "rotate: wpaperd was NOT restarted" '[ "$(wpid)" = "$p0" ]'
+pkill -f "$D daemon" 2>/dev/null
+bash "$D" set "$WP/b.png" >/dev/null 2>&1
+check "set (pin) turns automatic changes off" '[ "$(cat "$T/state/dot-wallpaper/rotate")" = off ]'
+bash "$D" rotate 20 >/dev/null 2>&1; bash "$D" next >/dev/null 2>&1
+check "next keeps automatic changes on" '[ "$(cat "$T/state/dot-wallpaper/rotate")" = 20 ]'
+pkill -f "$D daemon" 2>/dev/null
+echo "--- several monitors: one wallpaper"
+sed -i "s#^path = .*#path = \"$WP\"#" "$T/cfg/wpaperd/config.toml"
+check "old folder config: wpaperd would pick per display" '[ -d "$(cfgpath)" ]'
+bash "$D" sync >/dev/null 2>&1
+check "sync: config now points at one image" '[ -f "$(cfgpath)" ]'
+check "sync: [any] follows too (same image everywhere)" '[ "$(grep -c "^path = \"$(cfgpath)\"" "$T/cfg/wpaperd/config.toml")" = 2 ]'
+bash "$D" doctor 2>&1 | grep -q "PER DISPLAY" && fail_doc=1 || fail_doc=0
+check "doctor is quiet once synced" '[ "$fail_doc" = 0 ]'
 
 echo "--- fallback: restart when wpaperctl cannot do it"
 FAIL_SET=1 bash "$D" set "$WP/c.png" >/dev/null 2>&1; sleep 0.8
 check "set-wallpaper failed -> config still updated" '[ "$(cfgpath)" = "$WP/c.png" ]'
 check "...and wpaperd was restarted (new process)" '[ -n "$(wpid)" ] && [ "$(wpid)" != "$p0" ]'
 pkill -x wpaperd; sleep 0.4
-bash "$D" rotate >/dev/null 2>&1; sleep 0.8
+bash "$D" set "$WP/a.png" >/dev/null 2>&1; sleep 0.8
 check "wpaperd not running -> it is started" 'pgrep -x wpaperd >/dev/null'
 pkill -x wpaperd
 

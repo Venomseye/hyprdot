@@ -98,4 +98,16 @@ mv "$R" "$R.gone"
 check "nothing points at the repo now" '[ -z "$(find "$H/.config" "$H/.local/bin" -type l)" ] && [ -x "$H/.local/bin/dot-reload" ]'
 mv "$R.gone" "$R"
 
+echo "--- 8. uninstall"
+rm -rf "$H/.config" "$H/.local" "$H"/.config-backup-*
+install
+echo "# my own edit" >> "$H/.config/hypr/rules.lua"
+install --uninstall
+check "uninstall succeeded" '[ "$RC" = 0 ] || { tail -20 "$T/out"; false; }'
+check "an untouched file was removed" '[ ! -e "$H/.local/bin/dot-reload" ] && [ ! -e "$H/.config/hypr/bindings.lua" ]'
+check "a file you edited was kept" 'grep -q "my own edit" "$H/.config/hypr/rules.lua"'
+check "the manifest is gone" '[ ! -e "$H/.local/share/hyprdot/manifest" ]'
+install --uninstall
+check "uninstall with no manifest fails politely" '[ "$RC" != 0 ] && grep -q "nothing to uninstall" "$T/out"'
+
 echo; echo "$pass passed, $fail failed"; [ "$fail" = 0 ]
